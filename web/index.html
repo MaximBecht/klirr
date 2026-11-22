@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Klirr — the free &amp; open-source guitar amp, in your browser. Plug in your guitar and play; all processing stays on your computer."
+    />
+    <meta name="color-scheme" content="dark" />
+    <title>Klirr — the free &amp; open-source guitar amp</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <main class="amp-shell" id="app">
+      <header class="amp-header">
+        <div class="brand">
+          <svg class="tube" id="tube" viewBox="0 0 100 120" aria-hidden="true">
+            <defs>
+              <radialGradient id="tube-glow" cx="50%" cy="55%" r="50%">
+                <stop offset="0" stop-color="#ffb347" stop-opacity="0.95" />
+                <stop offset="0.45" stop-color="#ff7a1a" stop-opacity="0.55" />
+                <stop offset="1" stop-color="#ff7a1a" stop-opacity="0" />
+              </radialGradient>
+              <linearGradient id="tube-glass" x1="0" y1="0" x2="1" y2="0">
+                <stop offset="0" stop-color="#8b8b9a" stop-opacity="0.2" />
+                <stop offset="0.5" stop-color="#8b8b9a" stop-opacity="0.04" />
+                <stop offset="1" stop-color="#8b8b9a" stop-opacity="0.2" />
+              </linearGradient>
+            </defs>
+            <g stroke-linecap="round" stroke-linejoin="round">
+              <rect x="46" y="5" width="8" height="9" rx="3" class="tube-metal-fill" />
+              <path
+                d="M22 92 V46 C22 24 34 12 50 12 C66 12 78 24 78 46 V92 Z"
+                fill="url(#tube-glass)"
+                class="tube-metal"
+                stroke-width="3"
+              />
+              <ellipse class="tube-glow" cx="50" cy="60" rx="24" ry="30" fill="url(#tube-glow)" />
+              <rect
+                x="35"
+                y="34"
+                width="30"
+                height="42"
+                rx="2.5"
+                fill="none"
+                class="tube-metal"
+                stroke-width="2.5"
+              />
+              <polyline
+                points="42,38 58,42 42,46 58,50 42,54 58,58 42,62 58,66 42,70"
+                fill="none"
+                class="tube-metal"
+                stroke-width="1.6"
+              />
+              <line class="tube-cathode" x1="50" y1="36" x2="50" y2="74" stroke-width="3" />
+              <ellipse class="tube-heater" cx="50" cy="85" rx="13" ry="3.5" />
+              <rect
+                x="17"
+                y="91"
+                width="66"
+                height="14"
+                rx="3"
+                fill="#202028"
+                class="tube-metal"
+                stroke-width="3"
+              />
+              <line x1="34" y1="106" x2="34" y2="115" class="tube-metal" stroke-width="3" />
+              <line x1="50" y1="106" x2="50" y2="115" class="tube-metal" stroke-width="3" />
+              <line x1="66" y1="106" x2="66" y2="115" class="tube-metal" stroke-width="3" />
+            </g>
+          </svg>
+          <div>
+            <h1 class="brand-name">Klirr</h1>
+            <span class="brand-sub">The free &amp; open-source guitar amp</span>
+          </div>
+        </div>
+        <div class="status-cluster">
+          <div class="power-indicator" id="power">
+            <span class="power-dot"></span>
+            <span id="status-text">OFFLINE</span>
+          </div>
+          <div class="meters" id="meters"></div>
+        </div>
+      </header>
+
+      <section class="device-row" aria-label="Audio devices">
+        <div class="device-group">
+          <label class="device-label" for="input-device">INPUT</label>
+          <select class="device-select" id="input-device"></select>
+        </div>
+        <div class="device-group device-group--narrow">
+          <label class="device-label" for="input-channel">CHANNEL</label>
+          <select class="device-select" id="input-channel">
+            <option value="0">Input 1 (left)</option>
+            <option value="1">Input 2 (right)</option>
+          </select>
+        </div>
+        <div class="device-group">
+          <label class="device-label" for="output-device">OUTPUT</label>
+          <select class="device-select" id="output-device"></select>
+        </div>
+        <div class="device-group device-group--actions">
+          <button type="button" class="btn btn--start" id="start">▶ ENGAGE</button>
+          <button type="button" class="btn btn--stop" id="stop" disabled>■ STOP</button>
+          <button type="button" class="btn btn--bypass" id="bypass" aria-pressed="false">
+            ⊘ BYPASS
+          </button>
+        </div>
+        <p class="notice" id="device-notice" hidden></p>
+      </section>
+
+      <section class="mode-section" aria-label="Amp channel and cabinet">
+        <div class="mode-group">
+          <div class="section-label">CHANNEL</div>
+          <div id="channel"></div>
+        </div>
+        <div class="mode-group">
+          <div class="section-label">CABINET</div>
+          <div id="cabinet"></div>
+          <button type="button" class="btn btn--ghost" id="load-ir">LOAD IR…</button>
+          <input type="file" id="ir-file" accept=".wav,audio/wav,audio/x-wav,audio/*" hidden />
+          <span class="ir-name" id="ir-name"></span>
+        </div>
+      </section>
+
+      <section class="knob-panel" id="knobs" aria-label="Controls"></section>
+
+      <footer class="amp-footer">
+        <span
+          >Drag knobs vertically · Shift for fine · Double-click to reset · Drop a .wav IR
+          anywhere</span
+        >
+        <span class="footer-status" id="footer-status" role="status" aria-live="polite"></span>
+        <span class="footer-latency" id="latency"></span>
+      </footer>
+
+      <div class="drop-overlay" id="drop-overlay" hidden>
+        <div>DROP IMPULSE RESPONSE (.WAV)<span>Read locally, never uploaded</span></div>
+      </div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

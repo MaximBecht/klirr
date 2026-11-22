@@ -18,8 +18,9 @@ processing happens on your own computer; nothing is uploaded.
 *The name comes from the German* Klirrfaktor *— total harmonic distortion, which is exactly
 what an amp's gain stage produces.*
 
-> **Status: early development.** The DSP core (`crates/klirr-dsp`) is done and tested. The web
-> app is next, then a desktop app with lower latency. See the [project plan](docs/PLAN.md).
+> **Status: early development.** The DSP core (`crates/klirr-dsp`) is done and tested. The first
+> version of the web app (`web/`) runs locally; public hosting and a desktop app with lower
+> latency come next. See the [project plan](docs/PLAN.md).
 
 ## Features
 
@@ -44,6 +45,8 @@ input trim → noise gate → high-pass → amp channel (4× oversampled) → to
 
 ```
 crates/klirr-dsp/   DSP core in Rust (shared by the web and desktop versions)
+crates/klirr-wasm/  WebAssembly bridge: a small C ABI around the core for the AudioWorklet
+web/                web app: Vite + TypeScript UI, AudioWorklet host
 docs/               project plan; later user and developer docs
 audio/              your local test recordings (ignored by git)
 ```
@@ -108,18 +111,45 @@ The input must be a `.wav` file. To convert another format, e.g. with ffmpeg:
 cargo run --release --example bench
 ```
 
-### WebAssembly
+### Web app
+
+You also need [Node.js](https://nodejs.org) 20.19 or newer and the WebAssembly target:
 
 ```sh
 rustup target add wasm32-unknown-unknown
-cargo build -p klirr-dsp --release --target wasm32-unknown-unknown
+cd web
+npm install
+npm run dev          # builds the engine to WebAssembly, then serves http://localhost:5173
+```
+
+Open the page in Chrome or Edge (they can also choose the output device), pick your input,
+press **Engage** and allow audio input. Your settings are remembered in the browser.
+
+- **Use a Hi-Z / instrument input.** A guitar on a plain line-in works, but sounds weaker and
+  duller; an audio interface or a pedal in front fixes that.
+- **Latency** in the browser is roughly 20–40 ms from string to ear on Windows (browsers cannot
+  use ASIO). Fine for practice; the desktop app will do better.
+- **Cabinet IRs:** drop a `.wav` impulse response anywhere on the page (or use *Load IR…*).
+  It is read locally and never uploaded.
+- Many interfaces show up as one stereo device: *Input 1* is the left channel, *Input 2* the
+  right one.
+
+Other scripts in `web/`:
+
+```sh
+npm test               # Vitest (needs `npm run build:wasm` first; `dev` and `build` run it)
+npm run lint           # ESLint
+npm run format         # Prettier
+npm run typecheck      # TypeScript
+npm run build          # production build into web/dist/
 ```
 
 ## Contributing
 
 Issues and pull requests are welcome. CI runs formatting, clippy, tests on Linux, Windows and
-macOS, a WebAssembly build and a minimum-Rust-version check; please make sure
-`cargo fmt`, `cargo clippy --all-targets -- -D warnings` and `cargo test` pass.
+macOS, a WebAssembly build, a minimum-Rust-version check and the web app's lint, type check,
+tests and build; please make sure `cargo fmt`, `cargo clippy --all-targets -- -D warnings`
+and `cargo test` pass, and in `web/` `npm run lint`, `npm run typecheck` and `npm test`.
 
 ## License
 

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/klirr-dsp"]
+members = ["crates/klirr-dsp", "crates/klirr-wasm"]
 
 [workspace.package]
 version = "0.1.0"

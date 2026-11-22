@@ -1,0 +1,25 @@
+[package]
+name = "klirr-wasm"
+description = "WebAssembly bridge of Klirr: a small C ABI around klirr-dsp for the AudioWorklet"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+klirr-dsp = { path = "../klirr-dsp" }
+
+# Same as the workspace lints, except that `unsafe_code` is denied rather than forbidden:
+# exporting symbols needs `#[unsafe(no_mangle)]`, which is allowed on exactly those items.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -75,8 +75,8 @@ Every row has a regression test in `crates/klirr-dsp/tests/regressions.rs`.
 klirr/
 ├── crates/
 │   ├── klirr-dsp/        # Pure Rust DSP core: no I/O, no allocation while processing
-│   └── klirr-wasm/       # (phase 2) C-ABI exports of the core for the AudioWorklet
-├── web/                  # (phase 2) Vite + TypeScript UI, AudioWorklet host
+│   └── klirr-wasm/       # C-ABI exports of the core for the AudioWorklet
+├── web/                  # Vite + TypeScript UI, AudioWorklet host
 ├── desktop/              # (phase 4) Tauri app
 ├── docs/                 # This plan; later user and developer docs
 └── .github/workflows/    # CI/CD
@@ -132,9 +132,13 @@ high-gain stage measures around −22 dB.
 
 ### 4.3 Web version
 
-- The Rust core is compiled to `wasm32-unknown-unknown` and loaded into an `AudioWorklet`
-  (the main thread compiles the module and passes it to the worklet, since worklets cannot
-  `fetch`). Exports are a small C ABI, not wasm-bindgen glue.
+- The Rust core is compiled to `wasm32-unknown-unknown` (`crates/klirr-wasm`) and loaded into
+  an `AudioWorklet`. Worklets cannot `fetch`, so the main thread fetches the module bytes and
+  sends them to the worklet, which instantiates them. (Sending bytes rather than a compiled
+  `WebAssembly.Module` works in every browser.) Exports are a small C ABI, not wasm-bindgen
+  glue; the module has no imports.
+- Each worklet instance owns one engine. Audio passes through two fixed buffers in wasm
+  memory; the worklet rebuilds its typed-array views whenever memory grows.
 - UI → audio: knob changes are sent as messages and smoothed inside the core. Meters come back
   at ~30 fps.
 - Optional later: `SharedArrayBuffer` for meters/params. It needs COOP/COEP headers, which are
@@ -210,9 +214,9 @@ high-gain stage measures around −22 dB.
 - **Tests:** Rust unit + regression tests for the DSP (block-size invariance, stability,
   aliasing limit, gate smoothness, no NaN/Inf, limiter ceiling). Later Vitest for the UI and a
   Playwright smoke test with Chrome's fake microphone.
-- **CI (GitHub Actions):** `cargo fmt --check`, `clippy -D warnings`, tests, and a
-  `wasm32-unknown-unknown` build on every push/PR. Later: web lint/typecheck/test/build,
-  preview deploy per PR, production deploy on `main` via `wrangler`, desktop release builds on
+- **CI (GitHub Actions):** `cargo fmt --check`, `clippy -D warnings`, tests, a
+  `wasm32-unknown-unknown` build, and web lint/format/typecheck/test/build on every push/PR.
+  Later: preview deploy per PR, production deploy on `main` via `wrangler`, desktop release builds on
   tags.
 - **Docs:** README to start. When the project grows: a `docs/` folder (user guide, DSP design,
   contributing).
@@ -231,12 +235,14 @@ high-gain stage measures around −22 dB.
 - [ ] Listening test with real DI recordings; tune voicings and cabinets by ear
 
 ### Phase 2 — Web version (`crates/klirr-wasm`, `web/`)
-- [ ] C-ABI WASM exports + AudioWorklet processor
-- [ ] UI in TypeScript (throttled knob messages, self-hosted fonts)
-- [ ] Device + channel selection, output selection with Firefox/Safari notice
-- [ ] Drag-and-drop IR loading
-- [ ] Klirr word mark + tube logo in the UI (refine the first version)
-- [ ] Vitest + Playwright, web CI
+- [x] C-ABI WASM exports + AudioWorklet processor
+- [x] UI in TypeScript (throttled knob messages, self-hosted fonts, settings remembered locally)
+- [x] Device + channel selection, output selection with Firefox/Safari notice
+- [x] Drag-and-drop IR loading
+- [x] Klirr word mark + tube logo in the UI (first version; the tube glows while engaged)
+- [x] Vitest unit tests (incl. the real wasm module), web CI job
+- [ ] Playwright smoke test with Chrome's fake microphone
+- [ ] Test with a real guitar in Chrome, Edge and Firefox; check latency figures
 
 ### Phase 3 — Public launch
 - [ ] Trademark / GitHub / crates.io / domain check for "Klirr"
