@@ -203,7 +203,7 @@ high-gain stage measures around −22 dB.
 - Installers are small (≈3–10 MB) because no browser is bundled.
 - **Distribution:** `tauri-action` builds Windows/macOS/Linux installers on a release tag and
   attaches them to a GitHub Release. Download button →
-  `github.com/<owner>/klirr/releases/latest` (or `/releases/latest/download/<file>` with fixed
+  `github.com/MaximBecht/klirr/releases/latest` (or `/releases/latest/download/<file>` with fixed
   asset names). Tauri's updater can read from the same releases. No Google Drive.
 - **Code signing:** unsigned Windows installers show a SmartScreen warning (SignPath offers
   free signing for open source; Azure Trusted Signing ≈ $10/month). macOS needs an Apple
@@ -264,4 +264,3 @@ high-gain stage measures around −22 dB.
 - Is "Klirr" free to use? (EUIPO/USPTO, GitHub, crates.io, npm, domains)
 - Steinberg ASIO SDK license, before shipping ASIO in the desktop app.
 - Code-signing route for Windows (SignPath vs. Azure Trusted Signing).
-- Replace the `OWNER` placeholder in `Cargo.toml` and the README once the GitHub repo exists.
