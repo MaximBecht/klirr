@@ -19,6 +19,10 @@ updates:
       # on Linux fails without them). Their version must match what rolldown's wasm32
       # binding asks for, so update them together with vite, by hand.
       - dependency-name: "@emnapi/*"
+      # TypeScript 7.0 has no programmatic API, so typescript-eslint cannot run on it.
+      # Its support is planned for 7.1; Dependabot offers that one again.
+      - dependency-name: typescript
+        versions: ["7.0.x"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

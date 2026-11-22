@@ -258,6 +258,8 @@ high-gain stage measures around −22 dB.
 ### Later ideas
 - Presets (local first; optionally shared via a small Worker API with KV/D1)
 - Tuner, IR reverb, more amp voicings, your own recorded cabinet IRs
+- TypeScript 7 once typescript-eslint supports it (planned for 7.1). 7.0 passes typecheck,
+  tests, build and smoke test, but has no API for typescript-eslint; Dependabot skips 7.0.x.
 
 ## 9. Open questions
 
