@@ -50,6 +50,9 @@ export class KlirrDsp {
   private buffer: ArrayBuffer | null = null;
   private input = new Float32Array(0);
   private output = new Float32Array(0);
+  /** The last returned block of output, reused while the block length stays the same. */
+  private outputBlock = new Float32Array(0);
+  private meters = new Float32Array(0);
 
   constructor(exports: KlirrExports, sampleRate: number) {
     this.x = exports;
@@ -68,19 +71,25 @@ export class KlirrDsp {
     this.buffer = buf;
     this.input = new Float32Array(buf, this.x.klirr_input_ptr(), this.maxBlock);
     this.output = new Float32Array(buf, this.x.klirr_output_ptr(), this.maxBlock);
+    this.outputBlock = this.output;
   }
 
   /**
    * Processes one block. `input` may be undefined (no input connected), which is silence.
    * Returns a view of the output; it is only valid until the next call.
+   *
+   * Runs on the audio thread, so it creates no garbage once the block length is steady:
+   * garbage means collector pauses, and a pause can make the browser miss its deadline.
    */
   process(input: Float32Array | undefined, length: number): Float32Array {
     this.refreshViews();
     const n = Math.min(length, this.maxBlock);
-    if (input) this.input.set(input.subarray(0, n));
-    else this.input.fill(0, 0, n);
+    if (!input) this.input.fill(0, 0, n);
+    else if (input.length === n) this.input.set(input);
+    else this.input.set(input.subarray(0, n));
     this.x.klirr_process(n);
-    return this.output.subarray(0, n);
+    if (this.outputBlock.length !== n) this.outputBlock = this.output.subarray(0, n);
+    return this.outputBlock;
   }
 
   setParam(index: number, value: number): void {
@@ -93,7 +102,9 @@ export class KlirrDsp {
 
   takeMeters(): Meters {
     const ptr = this.x.klirr_take_meters();
-    const m = new Float32Array(this.x.memory.buffer, ptr, 4);
+    if (this.meters.byteOffset !== ptr || this.meters.buffer !== this.x.memory.buffer)
+      this.meters = new Float32Array(this.x.memory.buffer, ptr, 4);
+    const m = this.meters;
     return {
       inputPeak: m[0] ?? 0,
       outputPeak: m[1] ?? 0,

@@ -6,6 +6,7 @@
 import { KlirrDsp, instantiate } from './dsp';
 import { METER_HZ, type FromWorklet, type ToWorklet } from './messages';
 import { PROCESSOR_NAME } from './messages';
+import { LoopbackProbe } from './probe';
 
 // AudioWorkletGlobalScope globals (not part of the DOM typings).
 declare const sampleRate: number;
@@ -21,6 +22,8 @@ class KlirrProcessor extends AudioWorkletProcessor {
   private dsp: KlirrDsp | null = null;
   private inputChannel = 0;
   private framesSinceMeters = 0;
+  /** A latency measurement in progress; it replaces the output while it runs. */
+  private probe: LoopbackProbe | null = null;
   private readonly framesPerMeter = Math.round(sampleRate / METER_HZ);
 
   constructor() {
@@ -61,6 +64,10 @@ class KlirrProcessor extends AudioWorkletProcessor {
         this.post({ type: 'ir-result', code });
         break;
       }
+      case 'measure-latency':
+        // Created here, between process() calls, so the audio thread never allocates.
+        this.probe ??= new LoopbackProbe(sampleRate);
+        break;
     }
   }
 
@@ -72,7 +79,19 @@ class KlirrProcessor extends AudioWorkletProcessor {
     const input = inputs[0];
     const source = input?.[this.inputChannel] ?? input?.[0];
     const result = this.dsp.process(source, first.length);
-    for (const ch of out) ch.set(result);
+    if (this.probe) {
+      const running = this.probe.process(source, first);
+      for (let c = 1; c < out.length; c++) out[c]?.set(first);
+      if (!running) {
+        const done = this.probe.result;
+        this.probe = null;
+        // Drop the clicks the amp heard through the cable (delay and reverb tails).
+        this.dsp.reset();
+        if (done) this.post({ type: 'latency-result', result: done });
+      }
+    } else {
+      for (let c = 0; c < out.length; c++) out[c]?.set(result);
+    }
 
     this.framesSinceMeters += first.length;
     if (this.framesSinceMeters >= this.framesPerMeter) {

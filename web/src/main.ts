@@ -5,7 +5,13 @@ import '@fontsource/barlow/400.css';
 import '@fontsource/barlow/600.css';
 import './style.css';
 
-import { AudioEngine, describeStartError, outputSelectionSupported } from './audio/engine';
+import {
+  AudioEngine,
+  describeStartError,
+  outputSelectionSupported,
+  type LatencyEstimate,
+} from './audio/engine';
+import type { Measurement } from './audio/probe';
 import { CABINET_CUSTOM, CABINET_NAMES, CHANNEL_NAMES, P, spec } from './params';
 import { loadSettings, saveSettings } from './settings';
 import * as fmt from './ui/format';
@@ -31,7 +37,16 @@ const stopBtn = $('stop') as HTMLButtonElement;
 const bypassBtn = $('bypass') as HTMLButtonElement;
 const deviceNotice = $('device-notice');
 const footerStatus = $('footer-status');
-const latencyText = $('latency');
+const latencyButton = $('latency');
+const latencyPanel = $('latency-info');
+const latInput = $('lat-input');
+const latOutput = $('lat-output');
+const latEngine = $('lat-engine');
+const latTotal = $('lat-total');
+const latMeasured = $('lat-measured');
+const latMeasuredDetail = $('lat-measured-detail');
+const latMeasureBtn = $('lat-measure') as HTMLButtonElement;
+const latDropouts = $('lat-dropouts');
 const irButton = $('load-ir') as HTMLButtonElement;
 const irFile = $('ir-file') as HTMLInputElement;
 const irName = $('ir-name');
@@ -270,6 +285,7 @@ channelSelect.value = String(settings.inputChannel);
 inputSelect.addEventListener('change', () => {
   settings.inputDeviceId = inputSelect.value;
   persist();
+  forgetMeasurement();
   engine
     .setInputDevice(inputSelect.value)
     .then(updateNotice)
@@ -286,6 +302,7 @@ channelSelect.addEventListener('change', () => {
 outputSelect.addEventListener('change', () => {
   settings.outputDeviceId = outputSelect.value;
   persist();
+  forgetMeasurement();
   engine.setOutputDevice(outputSelect.value).catch((err: unknown) => {
     say(`Could not switch output: ${describeStartError(err)}`, true);
   });
@@ -307,8 +324,11 @@ engine.onStateChange = (state) => {
     inMeter.reset();
     outMeter.reset();
     gateLed.classList.remove('is-on');
-    latencyText.textContent = '';
   }
+  if (state !== 'running') measurement = null;
+  dropouts = engine.dropouts();
+  latMeasureBtn.disabled = state !== 'running' || measuring;
+  updateLatency();
 };
 engine.onInputEnded = () => {
   say('The input device stopped (unplugged?). Choose another input or engage again.', true);
@@ -321,10 +341,6 @@ startBtn.addEventListener('click', () => {
     .then(async () => {
       if (!engine.running) return;
       say('Ready. Play!');
-      const ms = engine.latencyMs();
-      latencyText.textContent = ms === null ? '' : `LATENCY ≈ ${Math.round(ms)} MS`;
-      latencyText.title =
-        'Estimated by the browser: input + output buffers + the engine. The real figure also depends on your interface driver.';
       await refreshDevices();
     })
     .catch((err: unknown) => {
@@ -336,6 +352,111 @@ stopBtn.addEventListener('click', () => {
     say('Stopped');
     updateNotice();
   });
+});
+
+// ── Latency ────────────────────────────────────────────────
+/** The last loopback measurement; void once the devices change or audio stops. */
+let measurement: (Measurement & { ok: true }) | null = null;
+let measuring = false;
+/** Dropouts since Engage, sampled once a second; null when unknown. */
+let dropouts: { count: number; addedMs: number } | null = null;
+/** The dropout count when the last measurement was taken. */
+let dropoutsAtMeasurement = 0;
+
+const ms = (v: number) => `${v.toFixed(1)} ms`;
+
+function showEstimate(e: LatencyEstimate | null): void {
+  latInput.textContent = !e ? '—' : e.inputMs === null ? 'not reported' : ms(e.inputMs);
+  latOutput.textContent = e ? ms(e.outputMs) : '—';
+  latEngine.textContent = e ? ms(e.engineMs) : '—';
+  latTotal.textContent = e ? `≈ ${ms(e.totalMs)}` : '—';
+}
+
+const plural = (n: number, word: string) => `${String(n)} ${word}${n === 1 ? '' : 's'}`;
+
+function describeDropouts(): string {
+  if (!engine.running) return 'Dropouts are counted while audio runs.';
+  if (!dropouts || dropouts.count === 0) return 'No dropouts since Engage.';
+  return `${plural(dropouts.count, 'dropout')} since Engage, adding about ${ms(dropouts.addedMs)} of latency.`;
+}
+
+function updateLatency(): void {
+  const e = engine.latencyEstimate();
+  const dropoutCount = engine.running ? (dropouts?.count ?? 0) : 0;
+  latencyButton.classList.toggle('has-dropouts', dropoutCount > 0);
+  const suffix = dropoutCount > 0 ? ` · ${plural(dropoutCount, 'DROPOUT')}` : '';
+  if (measurement) {
+    latencyButton.textContent = `LATENCY ${String(Math.round(measurement.totalMs))} MS · MEASURED${suffix}`;
+    latencyButton.title = 'Measured over a loopback cable. Click for details.';
+  } else if (e) {
+    latencyButton.textContent = `LATENCY ≈ ${String(Math.round(e.totalMs))} MS${suffix}`;
+    latencyButton.title =
+      'Estimated from what the browser reports. Click to measure the real figure.';
+  } else {
+    latencyButton.textContent = 'LATENCY INFO';
+    latencyButton.title = 'What latency to expect, and how to measure it';
+  }
+  // The panel's figures only matter while it is open.
+  if (!latencyPanel.matches(':popover-open')) return;
+  showEstimate(e);
+  latDropouts.textContent = describeDropouts();
+  if (measurement) {
+    latMeasured.textContent = ms(measurement.totalMs);
+    latMeasuredDetail.textContent = `Round trip ${ms(measurement.roundTripMs)} + engine, ${String(measurement.hits)} clicks agreed, ${plural(dropoutsAtMeasurement, 'dropout')} before it.`;
+  } else if (!measuring) {
+    latMeasured.textContent = '—';
+    if (!engine.running) latMeasuredDetail.textContent = 'Engage, then measure.';
+  }
+}
+
+// Polling reads a few properties once a second: no cost to the audio.
+setInterval(() => {
+  if (!engine.running) return;
+  dropouts = engine.dropouts();
+  updateLatency();
+}, 1000);
+latencyPanel.addEventListener('toggle', updateLatency);
+
+/** Invalidates the measurement when the path it measured changes. */
+function forgetMeasurement(): void {
+  if (!measurement) return;
+  measurement = null;
+  latMeasuredDetail.textContent = 'The devices changed: measure again.';
+  updateLatency();
+}
+
+const MEASURE_ERRORS: Record<Exclude<Measurement, { ok: true }>['reason'], string> = {
+  'no-signal':
+    'No click came back. Is the cable going from the output to the selected input, and is the interface gain up?',
+  noisy: 'The input is not quiet. Mute your strings and turn noisy pedals off, then try again.',
+  inconsistent:
+    'The clicks came back at different times. Something else may be playing into the input: try again.',
+  stopped: 'Audio stopped during the measurement.',
+};
+
+latMeasureBtn.addEventListener('click', () => {
+  measuring = true;
+  latMeasureBtn.disabled = true;
+  latMeasured.textContent = '…';
+  latMeasuredDetail.textContent = 'Measuring: you will hear a few clicks.';
+  engine
+    .measureLatency()
+    .then((m) => {
+      measurement = m.ok ? m : null;
+      dropoutsAtMeasurement = dropouts?.count ?? 0;
+      if (!m.ok) {
+        latMeasured.textContent = '—';
+        latMeasuredDetail.textContent = MEASURE_ERRORS[m.reason];
+      }
+    })
+    .catch((err: unknown) => {
+      latMeasuredDetail.textContent = err instanceof Error ? err.message : String(err);
+    })
+    .finally(() => {
+      measuring = false;
+      latMeasureBtn.disabled = !engine.running;
+      updateLatency();
+    });
 });
 
 // ── Impulse responses ──────────────────────────────────────

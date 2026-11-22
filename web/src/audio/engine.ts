@@ -5,6 +5,8 @@ import workletUrl from './worklet.ts?worker&url';
 import type { Meters } from './dsp';
 import { IR_ERRORS } from './dsp';
 import { PROCESSOR_NAME, type FromWorklet, type ToWorklet } from './messages';
+import { DropoutWatch } from './dropouts';
+import { summarise, type Measurement } from './probe';
 import { wavSampleRate } from './wav';
 
 export interface Devices {
@@ -26,6 +28,17 @@ export interface Ir {
 }
 
 type State = 'stopped' | 'starting' | 'running';
+
+/** Latency as the browser reports it, in ms. */
+export interface LatencyEstimate {
+  /** Input side, or null where the browser does not report it (Firefox, Safari). */
+  inputMs: number | null;
+  /** Output side: the context's own buffer plus what lies after it. */
+  outputMs: number;
+  /** The engine itself (oversampling filters + cabinet convolution). */
+  engineMs: number;
+  totalMs: number;
+}
 
 /** True if the browser can choose the output device (Chrome, Edge). */
 export const outputSelectionSupported =
@@ -59,6 +72,9 @@ export class AudioEngine {
   private ir: Ir | null = null;
   private irWaiters: ((code: number) => void)[] = [];
   private abortStart: (() => void) | null = null;
+  private measureWaiter: ((m: Measurement) => void) | null = null;
+  private readonly dropoutWatch = new DropoutWatch();
+  private dropoutTimer: ReturnType<typeof setInterval> | null = null;
 
   get running(): boolean {
     return this.state === 'running';
@@ -136,6 +152,7 @@ export class AudioEngine {
       if (opts.outputDeviceId) await this.setOutputDevice(opts.outputDeviceId);
       await ctx.resume();
       if (this.ir) void this.sendIr(this.ir);
+      this.watchDropouts(ctx);
       this.setState('running');
     } catch (err) {
       if (cancelled()) return;
@@ -145,6 +162,8 @@ export class AudioEngine {
   }
 
   async stop(): Promise<void> {
+    if (this.dropoutTimer !== null) clearInterval(this.dropoutTimer);
+    this.dropoutTimer = null;
     if (this.flushTimer !== null) clearTimeout(this.flushTimer);
     this.flushTimer = null;
     this.pending.clear();
@@ -158,6 +177,8 @@ export class AudioEngine {
     const ctx = this.ctx;
     this.ctx = this.node = this.source = this.stream = null;
     for (const w of this.irWaiters.splice(0)) w(100);
+    this.measureWaiter?.({ ok: false, reason: 'stopped' });
+    this.measureWaiter = null;
     this.abortStart?.();
     this.abortStart = null;
     this.setState('stopped');
@@ -205,14 +226,53 @@ export class AudioEngine {
     return track?.getSettings().channelCount ?? 2;
   }
 
-  /** Rough string-to-ear latency added by the browser and the engine, in ms. */
-  latencyMs(): number | null {
+  /**
+   * The latency the browser reports. Cheap (it reads a few properties), so it can be polled;
+   * the output figure can change while running. It misses whatever the browser does not
+   * know about: converters, driver buffers and, in some browsers, the whole input side.
+   */
+  latencyEstimate(): LatencyEstimate | null {
     const ctx = this.ctx;
-    if (!ctx) return null;
+    if (!ctx || this.state !== 'running') return null;
     const track = this.stream?.getAudioTracks()[0];
-    const inputLatency = (track?.getSettings() as { latency?: number } | undefined)?.latency ?? 0;
-    const outputLatency = ctx.baseLatency + (ctx.outputLatency || 0);
-    return (inputLatency + outputLatency + this.latencySamples / ctx.sampleRate) * 1000;
+    const input = (track?.getSettings() as { latency?: unknown } | undefined)?.latency;
+    const inputMs = typeof input === 'number' && Number.isFinite(input) ? input * 1000 : null;
+    const outputMs = (ctx.baseLatency + (ctx.outputLatency || 0)) * 1000;
+    const engineMs = (this.latencySamples / ctx.sampleRate) * 1000;
+    return { inputMs, outputMs, engineMs, totalMs: (inputMs ?? 0) + outputMs + engineMs };
+  }
+
+  /**
+   * Times the audio fell behind for good since audio started, and the latency that added.
+   * Null when not running.
+   */
+  dropouts(): { count: number; addedMs: number } | null {
+    if (this.state !== 'running') return null;
+    return { count: this.dropoutWatch.count, addedMs: this.dropoutWatch.addedMs };
+  }
+
+  /** Reads the audio clock ten times a second (two numbers each time: no cost to the audio). */
+  private watchDropouts(ctx: AudioContext): void {
+    this.dropoutWatch.reset();
+    if (this.dropoutTimer !== null) clearInterval(this.dropoutTimer);
+    this.dropoutTimer = setInterval(() => {
+      this.dropoutWatch.feed(ctx.currentTime, performance.now());
+    }, 100);
+  }
+
+  /**
+   * Measures the real latency over a loopback cable (output → selected input): plays a few
+   * clicks in place of the amp and times their return. Takes one to three seconds.
+   */
+  measureLatency(): Promise<Measurement> {
+    if (!this.ctx || !this.node || this.state !== 'running')
+      return Promise.resolve({ ok: false, reason: 'stopped' });
+    if (this.measureWaiter) return Promise.reject(new Error('a measurement is already running'));
+    const result = new Promise<Measurement>((resolve) => {
+      this.measureWaiter = resolve;
+    });
+    this.post({ type: 'measure-latency' });
+    return result;
   }
 
   get irName(): string | null {
@@ -265,6 +325,10 @@ export class AudioEngine {
   private onWorkletMessage(msg: FromWorklet): void {
     if (msg.type === 'meters') this.onMeters(msg);
     else if (msg.type === 'ir-result') this.irWaiters.shift()?.(msg.code);
+    else if (msg.type === 'latency-result' && this.ctx) {
+      this.measureWaiter?.(summarise(msg.result, this.ctx.sampleRate, this.latencySamples));
+      this.measureWaiter = null;
+    }
   }
 
   private post(msg: ToWorklet, transfer: Transferable[] = []): void {

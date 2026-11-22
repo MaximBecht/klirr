@@ -243,6 +243,8 @@ high-gain stage measures around −22 dB.
 - [x] Klirr word mark + tube logo in the UI (first version; the tube glows while engaged)
 - [x] Vitest unit tests (incl. the real wasm module), web CI job
 - [x] Playwright smoke test with Chrome's fake microphone
+- [x] Latency panel: live browser-reported breakdown, loopback measurement (on request only),
+  dropout counter (audio clock vs wall clock)
 - [ ] Test with a real guitar in Chrome, Edge and Firefox; check latency figures
 
 ### Phase 3 — Public launch
