@@ -138,6 +138,8 @@ Other scripts in `web/`:
 
 ```sh
 npm test               # Vitest (needs `npm run build:wasm` first; `dev` and `build` run it)
+npm run test:e2e       # Playwright smoke test in Chromium with a fake microphone
+                       # (first time: `npx playwright install chromium`)
 npm run lint           # ESLint
 npm run format         # Prettier
 npm run typecheck      # TypeScript

@@ -1,3 +1,6 @@
 dist/
 src/wasm/
 package-lock.json
+test-results/
+playwright-report/
+e2e/.generated/

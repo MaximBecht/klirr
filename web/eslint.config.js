@@ -4,7 +4,7 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist/', 'src/wasm/'] },
+  { ignores: ['dist/', 'src/wasm/', 'test-results/', 'playwright-report/'] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   {
@@ -21,7 +21,7 @@ export default tseslint.config(
     ...tseslint.configs.disableTypeChecked,
   },
   {
-    files: ['scripts/**', 'eslint.config.js', 'vite.config.ts'],
+    files: ['scripts/**', 'e2e/**', 'eslint.config.js', 'vite.config.ts', 'playwright.config.ts'],
     languageOptions: { globals: { ...globals.node } },
   },
   prettier,

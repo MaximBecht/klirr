@@ -212,11 +212,12 @@ high-gain stage measures around −22 dB.
 ## 7. Quality and project hygiene
 
 - **Tests:** Rust unit + regression tests for the DSP (block-size invariance, stability,
-  aliasing limit, gate smoothness, no NaN/Inf, limiter ceiling). Later Vitest for the UI and a
-  Playwright smoke test with Chrome's fake microphone.
+  aliasing limit, gate smoothness, no NaN/Inf, limiter ceiling). Vitest for the UI and a
+  Playwright smoke test with Chrome's fake microphone (a generated pluck-and-silence WAV;
+  checks that sound flows, stays finite and under the limiter ceiling, and stops).
 - **CI (GitHub Actions):** `cargo fmt --check`, `clippy -D warnings`, tests, a
-  `wasm32-unknown-unknown` build, and web lint/format/typecheck/test/build on every push/PR.
-  Later: preview deploy per PR, production deploy on `main` via `wrangler`, desktop release builds on
+  `wasm32-unknown-unknown` build, and web lint/format/typecheck/test/build/smoke test on every
+  push/PR. Later: preview deploy per PR, production deploy on `main` via `wrangler`, desktop release builds on
   tags.
 - **Docs:** README to start. When the project grows: a `docs/` folder (user guide, DSP design,
   contributing).
@@ -241,7 +242,7 @@ high-gain stage measures around −22 dB.
 - [x] Drag-and-drop IR loading
 - [x] Klirr word mark + tube logo in the UI (first version; the tube glows while engaged)
 - [x] Vitest unit tests (incl. the real wasm module), web CI job
-- [ ] Playwright smoke test with Chrome's fake microphone
+- [x] Playwright smoke test with Chrome's fake microphone
 - [ ] Test with a real guitar in Chrome, Edge and Firefox; check latency figures
 
 ### Phase 3 — Public launch

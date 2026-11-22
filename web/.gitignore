@@ -1,2 +1,7 @@
 # Built from crates/klirr-wasm by `npm run build:wasm`
 /src/wasm/
+
+# Playwright
+/e2e/.generated/
+/test-results/
+/playwright-report/
