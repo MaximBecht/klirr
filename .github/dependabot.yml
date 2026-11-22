@@ -14,6 +14,11 @@ updates:
     groups:
       npm:
         patterns: ["*"]
+    ignore:
+      # Listed in package.json only so npm on Windows keeps them in the lock file (`npm ci`
+      # on Linux fails without them). Their version must match what rolldown's wasm32
+      # binding asks for, so update them together with vite, by hand.
+      - dependency-name: "@emnapi/*"
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -21,3 +26,7 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+    ignore:
+      # Its refs are toolchains, not versions: `@stable`, and `@1.85` for the
+      # minimum-Rust job, which must stay on the minimum.
+      - dependency-name: dtolnay/rust-toolchain
