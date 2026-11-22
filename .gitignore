@@ -1,0 +1,29 @@
+# Rust
+/target/
+
+# Node / web (phase 2)
+node_modules/
+dist/
+.wrangler/
+
+# Local reference material, not part of the project
+/legacy/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local test audio (DI recordings, renders): keep it in audio/, never commit it
+/audio/*
+!/audio/README.md
+*.wav
+*.mp3
+*.flac
+*.ogg
+*.m4a
+*.aif
+*.aiff
+# Small, license-clean fixtures for automated tests are the only exception
+!crates/**/fixtures/*.wav

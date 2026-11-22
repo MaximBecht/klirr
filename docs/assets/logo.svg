@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 330 120" width="330" height="120" role="img" aria-labelledby="title">
+  <title id="title">Klirr</title>
+  <defs>
+    <radialGradient id="glow" cx="50%" cy="55%" r="50%">
+      <stop offset="0" stop-color="#ffb347" stop-opacity="0.95"/>
+      <stop offset="0.45" stop-color="#ff7a1a" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ff7a1a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#8b949e" stop-opacity="0.18"/>
+      <stop offset="0.5" stop-color="#8b949e" stop-opacity="0.04"/>
+      <stop offset="1" stop-color="#8b949e" stop-opacity="0.18"/>
+    </linearGradient>
+    <linearGradient id="word" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#ea580c"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Vacuum tube (triode) -->
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <rect x="46" y="5" width="8" height="9" rx="3" fill="#8b949e"/>
+    <path d="M22 92 V46 C22 24 34 12 50 12 C66 12 78 24 78 46 V92 Z" fill="url(#glass)" stroke="#8b949e" stroke-width="3"/>
+    <ellipse cx="50" cy="60" rx="24" ry="30" fill="url(#glow)"/>
+    <!-- plate -->
+    <rect x="35" y="34" width="30" height="42" rx="2.5" fill="none" stroke="#8b949e" stroke-width="2.5"/>
+    <!-- grid -->
+    <polyline points="42,38 58,42 42,46 58,50 42,54 58,58 42,62 58,66 42,70" fill="none" stroke="#8b949e" stroke-width="1.6"/>
+    <!-- cathode -->
+    <line x1="50" y1="36" x2="50" y2="74" stroke="#ff8c2a" stroke-width="3"/>
+    <!-- heater glow -->
+    <ellipse cx="50" cy="85" rx="13" ry="3.5" fill="#ff8c2a" opacity="0.85"/>
+    <!-- base and pins -->
+    <rect x="17" y="91" width="66" height="14" rx="3" fill="#30363d" stroke="#8b949e" stroke-width="3"/>
+    <line x1="34" y1="106" x2="34" y2="115" stroke="#8b949e" stroke-width="3"/>
+    <line x1="50" y1="106" x2="50" y2="115" stroke="#8b949e" stroke-width="3"/>
+    <line x1="66" y1="106" x2="66" y2="115" stroke="#8b949e" stroke-width="3"/>
+  </g>
+
+  <!-- Word mark -->
+  <text x="100" y="86" fill="url(#word)" font-family="Inter, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif" font-size="76" font-weight="800" letter-spacing="-1">Klirr</text>
+</svg>

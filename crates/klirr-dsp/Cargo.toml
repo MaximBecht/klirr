@@ -1,0 +1,21 @@
+[package]
+name = "klirr-dsp"
+description = "DSP core of Klirr, the free & open-source guitar amp"
+keywords = ["audio", "dsp", "guitar", "amp", "distortion"]
+categories = ["multimedia::audio"]
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+realfft = "3.5"
+
+[dev-dependencies]
+hound = "3.5"
+
+[lints]
+workspace = true
