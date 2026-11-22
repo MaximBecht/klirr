@@ -132,8 +132,111 @@
           anywhere</span
         >
         <span class="footer-status" id="footer-status" role="status" aria-live="polite"></span>
-        <span class="footer-latency" id="latency"></span>
+        <button
+          type="button"
+          class="footer-latency"
+          id="latency"
+          popovertarget="latency-info"
+          aria-haspopup="dialog"
+        >
+          LATENCY INFO
+        </button>
       </footer>
+
+      <div
+        class="latency-panel"
+        id="latency-info"
+        popover
+        role="dialog"
+        aria-labelledby="latency-title"
+      >
+        <div class="latency-panel-head">
+          <h2 id="latency-title">LATENCY</h2>
+          <button
+            type="button"
+            class="latency-close"
+            popovertarget="latency-info"
+            popovertargetaction="hide"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div class="latency-figures">
+          <div class="latency-figure">
+            <div class="section-label">ESTIMATE · BROWSER</div>
+            <dl class="latency-table">
+              <dt>Input</dt>
+              <dd id="lat-input">—</dd>
+              <dt>Output</dt>
+              <dd id="lat-output">—</dd>
+              <dt>Engine</dt>
+              <dd id="lat-engine">—</dd>
+              <dt>Total</dt>
+              <dd id="lat-total">—</dd>
+            </dl>
+            <p class="latency-detail" id="lat-dropouts">Dropouts are counted while audio runs.</p>
+          </div>
+          <div class="latency-figure">
+            <div class="section-label">MEASURED · LOOPBACK</div>
+            <div class="latency-measured" id="lat-measured">—</div>
+            <p class="latency-detail" id="lat-measured-detail">Engage, then measure.</p>
+            <button type="button" class="btn btn--ghost" id="lat-measure" disabled>MEASURE</button>
+          </div>
+        </div>
+
+        <div class="latency-text">
+          <p>
+            <strong>The estimate</strong> adds up what the browser reports. It updates while you
+            play and costs nothing, but it misses what the browser does not know: the interface's
+            converters and driver buffers and, where Input says “not reported”, the whole input
+            side. The real figure is usually higher.
+          </p>
+          <p>
+            <strong>The measurement</strong> is the real string-to-ear figure. Connect a cable from
+            your interface's output to the input selected in Klirr, turn your speakers or headphones
+            down, mute your strings and press Measure. Klirr replaces the amp with a few short
+            clicks for a second or two and times how long each takes to come back. It runs only when
+            you press the button and adds nothing to the signal path.
+          </p>
+          <p>
+            <strong>Dropouts</strong> are counted when the audio thread falls behind and never
+            catches up. You may hear a tick or a gap, and the sound that arrived in the meantime now
+            waits in a buffer, so the latency grows by that much and stays there. If the latency
+            grows and dropouts are counted, close other programs and browser tabs, or try another
+            browser. If it grows without dropouts, the browser is adding buffering on its own.
+          </p>
+          <h3>What to expect</h3>
+          <ul>
+            <li>
+              <strong>macOS</strong> usually gives the lowest latency. Core Audio lets every app run
+              with small buffers, so Safari and Chrome both benefit.
+            </li>
+            <li>
+              <strong>Windows</strong> browsers cannot use ASIO; they go through the Windows audio
+              engine. Chrome and Edge are typically around 20–40 ms. Firefox buffers more on the
+              input side and is often around 50 ms: fine for trying out the amp.
+            </li>
+            <li>
+              <strong>Linux</strong> depends on the sound server (PipeWire or PulseAudio) and its
+              buffer size.
+            </li>
+            <li>
+              <strong>Bluetooth</strong> headphones or speakers add 100–300 ms. Use wired
+              headphones, ideally plugged into your interface.
+            </li>
+            <li>
+              Run your interface at the same sample rate as the system (48 kHz), and close other
+              programs that use audio.
+            </li>
+          </ul>
+          <p>
+            The planned desktop app talks to ASIO and Core Audio directly and aims for about 5–10
+            ms.
+          </p>
+        </div>
+      </div>
 
       <div class="drop-overlay" id="drop-overlay" hidden>
         <div>DROP IMPULSE RESPONSE (.WAV)<span>Read locally, never uploaded</span></div>

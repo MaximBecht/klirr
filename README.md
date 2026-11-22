@@ -127,8 +127,10 @@ press **Engage** and allow audio input. Your settings are remembered in the brow
 
 - **Use a Hi-Z / instrument input.** A guitar on a plain line-in works, but sounds weaker and
   duller; an audio interface or a pedal in front fixes that.
-- **Latency** in the browser is roughly 20–40 ms from string to ear on Windows (browsers cannot
-  use ASIO). Fine for practice; the desktop app will do better.
+- **Latency** in the browser is roughly 20–40 ms from string to ear on Windows in Chrome and Edge
+  (browsers cannot use ASIO), more in Firefox. Fine for practice; the desktop app will do better.
+  Click the latency figure in the footer for the browser's breakdown, or measure the real figure
+  with a cable from your interface's output to its input.
 - **Cabinet IRs:** drop a `.wav` impulse response anywhere on the page (or use *Load IR…*).
   It is read locally and never uploaded.
 - Many interfaces show up as one stereo device: *Input 1* is the left channel, *Input 2* the
