@@ -33,7 +33,7 @@ why. Update it when a decision changes.
 | UI | TypeScript + Vite, ESLint + Prettier |
 | Hosting | Cloudflare Workers **static assets** (no Worker code on the request path) |
 | Desktop (later) | Tauri: UI in the webview, audio in the native Rust backend via `cpal` |
-| Native audio backends | `cpal`: WASAPI shared + optional ASIO on Windows, Core Audio, ALSA/JACK. WASAPI exclusive later, if needed, as raw WASAPI via the `windows` crate (Windows only) |
+| Native audio backends | `cpal`: WASAPI shared + optional ASIO on Windows, Core Audio, ALSA/JACK. WASAPI exclusive through the `wasapi` crate (safe bindings, Windows only) |
 | Distribution (desktop) | GitHub Releases built by CI; the site's download button links to the latest release |
 | Cabinet sound | Built-in cabinets generated in code (no third-party files) + load your own IR |
 | Technical names | repo `klirr`, crate `klirr-dsp`, web package `klirr-web` |
@@ -202,11 +202,23 @@ high-gain stage measures around −22 dB.
 - Audio I/O via `cpal` (`crates/klirr-native`): WASAPI, and ASIO with an extra build step
   (`--features asio`: LLVM for bindgen; the SDK is downloaded by the build). Target latency
   ~5–10 ms.
-- cpal's WASAPI is **shared mode only**, with the period Windows picks (usually 10 ms), so it
-  is roughly as fast as the browser. The low latency comes from ASIO on Windows and Core Audio
-  on macOS. **WASAPI exclusive mode** (bypasses the Windows mixer, small buffers, no SDK, but
-  takes over the device) can be added later as a small Windows-only backend calling
-  `IAudioClient::Initialize` with `AUDCLNT_SHAREMODE_EXCLUSIVE` through the `windows` crate.
+- cpal's WASAPI is **shared mode only**, with the period Windows picks (usually 10 ms), and
+  keeps its client buffer (about 22 ms) full. The low latency comes from ASIO on Windows and
+  Core Audio on macOS.
+- **WASAPI exclusive mode** (`--host wasapi-exclusive`, `crates/klirr-native/src/exclusive.rs`)
+  bypasses the Windows mixer with the device's smallest period, needs no SDK and keeps the
+  Windows build MIT, but takes the device away from other programs. It uses the `wasapi`
+  crate's safe bindings, so the workspace keeps `unsafe_code = "forbid"`. One thread runs both
+  endpoints: the input is event driven and sets the pace; the output is polled and kept only
+  as full as the driver needs (learned at start: the largest chunk the driver takes between
+  two input periods, plus one period). Event-driven exclusive output was unreliable on the
+  Focusrite (its event fired only every second period).
+- **Measured** with a loopback cable on a Focusrite Scarlett at 48 kHz (string to ear, engine
+  included): ASIO 6.6 ms at 32 frames, 9.0 ms at 64, 15.8 ms at 128, 26.9 ms at 256; WASAPI
+  exclusive 11.1 ms with the driver buffer at 32 frames, 14.2 ms at 64, 25.2 ms at 256;
+  WASAPI shared about 89 ms whatever the driver buffer. The driver reports none of its own
+  latency to WASAPI, and its WASAPI path follows the ASIO buffer size last set, so a small
+  driver buffer matters for both.
 - cpal opens input and output as two streams. The input pushes into a lock-free ring, the
   output pulls from it and runs the engine (one processing callback, as in section 3). The
   ring is trimmed to a small safety margin so a random phase between the streams adds no
@@ -284,7 +296,7 @@ high-gain stage measures around −22 dB.
 - [x] Native audio host (`crates/klirr-native`, `cpal`): WASAPI, optional ASIO, Core Audio,
   ALSA/JACK; `devices`, `measure` (loopback probe, same as the web) and `play` commands
 - [ ] Measure native vs browser latency on real hardware (WASAPI, ASIO)
-- [ ] Optional WASAPI exclusive backend (raw WASAPI, Windows only)
+- [x] Optional WASAPI exclusive backend (`wasapi` crate, Windows only)
 - [ ] Tauri app with the `cpal` audio backend
 - [ ] Release workflow → GitHub Releases, download button on the site
 - [ ] Code signing

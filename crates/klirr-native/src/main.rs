@@ -1,5 +1,6 @@
 //! Klirr's native audio host: the same engine as the web app, on the platform's audio API
-//! (WASAPI or ASIO on Windows, Core Audio on macOS, ALSA or JACK on Linux).
+//! (WASAPI shared or exclusive, or ASIO on Windows; Core Audio on macOS; ALSA or JACK on
+//! Linux).
 //!
 //! It is the audio side of the planned desktop app and, for now, a command-line tool to
 //! compare native latency with the browser's:
@@ -14,6 +15,8 @@
 //! `--output PART`, `--channel N` (from 1), `--rate HZ`, `--buffer FRAMES`, `--margin FRAMES`.
 
 mod duplex;
+#[cfg(windows)]
+mod exclusive;
 mod host;
 mod probe;
 
@@ -37,15 +40,18 @@ usage:
   klirr-native play    [device options] [name=value ...] [ir=path.wav]
 
 device options:
-  --host NAME       audio API: wasapi (default on Windows), asio (build with --features asio),
+  --host NAME       audio API: wasapi (default on Windows, shared mode), wasapi-exclusive
+                    (Windows, takes over the device), asio (build with --features asio),
                     coreaudio, alsa, jack ...
   --device PART     input and output device whose name contains PART
   --input PART      input device (default: the host's default input)
   --output PART     output device (default: the host's default output)
   --channel N       input channel, from 1 (default 1)
   --rate HZ         sample rate (default: the output device's)
-  --buffer FRAMES   buffer size to ask the backend for (default: the backend's)
-  --margin FRAMES   safety margin between input and output (default: 0 for ASIO, 1 ms otherwise)
+  --buffer FRAMES   buffer size to ask the backend for (default: the backend's; for
+                    wasapi-exclusive the period, default the device's smallest)
+  --margin FRAMES   safety margin between input and output (default: 0 for ASIO and
+                    wasapi-exclusive, 1 ms otherwise)
 
 measure needs a cable from an output of the interface to the selected input.";
 
@@ -343,6 +349,18 @@ fn describe_device(device: &Device, input: bool) -> String {
 }
 
 fn devices(args: &Args) -> Result<(), Box<dyn Error>> {
+    #[cfg(windows)]
+    let exclusive = match args.options.host.as_deref() {
+        Some(name) if exclusive::is_host(name) => {
+            for line in exclusive::describe_devices()? {
+                println!("{line}");
+            }
+            println!("(* = default)");
+            return Ok(());
+        }
+        Some(_) => false,
+        None => true,
+    };
     let ids = match &args.options.host {
         Some(name) => vec![host::host(Some(name))?.id()],
         None => cpal::available_hosts(),
@@ -371,6 +389,12 @@ fn devices(args: &Args) -> Result<(), Box<dyn Error>> {
                 };
                 println!("   {mark} {n}  ({})", describe_device(&device, input));
             }
+        }
+    }
+    #[cfg(windows)]
+    if exclusive {
+        for line in exclusive::describe_devices()? {
+            println!("{line}");
         }
     }
     println!("(* = default)");
