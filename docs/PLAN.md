@@ -33,6 +33,7 @@ why. Update it when a decision changes.
 | UI | TypeScript + Vite, ESLint + Prettier |
 | Hosting | Cloudflare Workers **static assets** (no Worker code on the request path) |
 | Desktop (later) | Tauri: UI in the webview, audio in the native Rust backend via `cpal` |
+| Native audio backends | `cpal`: WASAPI shared + optional ASIO on Windows, Core Audio, ALSA/JACK. WASAPI exclusive later, if needed, as raw WASAPI via the `windows` crate (Windows only) |
 | Distribution (desktop) | GitHub Releases built by CI; the site's download button links to the latest release |
 | Cabinet sound | Built-in cabinets generated in code (no third-party files) + load your own IR |
 | Technical names | repo `klirr`, crate `klirr-dsp`, web package `klirr-web` |
@@ -75,7 +76,8 @@ Every row has a regression test in `crates/klirr-dsp/tests/regressions.rs`.
 klirr/
 ├── crates/
 │   ├── klirr-dsp/        # Pure Rust DSP core: no I/O, no allocation while processing
-│   └── klirr-wasm/       # C-ABI exports of the core for the AudioWorklet
+│   ├── klirr-wasm/       # C-ABI exports of the core for the AudioWorklet
+│   └── klirr-native/     # Native audio host (cpal); the desktop app's audio side
 ├── web/                  # Vite + TypeScript UI, AudioWorklet host
 ├── desktop/              # (phase 4) Tauri app
 ├── docs/                 # This plan; later user and developer docs
@@ -197,14 +199,40 @@ high-gain stage measures around −22 dB.
 
 - Tauri uses the OS webview (WebView2 on Windows). Web Audio inside the webview would have the
   **same** latency as the browser, so the audio must run in Tauri's **native Rust backend**.
-- Audio I/O via `cpal`: WASAPI, and ASIO with an extra build step (check the Steinberg ASIO
-  SDK license terms first). Target latency ~5–10 ms.
+- Audio I/O via `cpal` (`crates/klirr-native`): WASAPI, and ASIO with an extra build step
+  (`--features asio`: LLVM for bindgen; the SDK is downloaded by the build). Target latency
+  ~5–10 ms.
+- cpal's WASAPI is **shared mode only**, with the period Windows picks (usually 10 ms), so it
+  is roughly as fast as the browser. The low latency comes from ASIO on Windows and Core Audio
+  on macOS. **WASAPI exclusive mode** (bypasses the Windows mixer, small buffers, no SDK, but
+  takes over the device) can be added later as a small Windows-only backend calling
+  `IAudioClient::Initialize` with `AUDCLNT_SHAREMODE_EXCLUSIVE` through the `windows` crate.
+- cpal opens input and output as two streams. The input pushes into a lock-free ring, the
+  output pulls from it and runs the engine (one processing callback, as in section 3). The
+  ring is trimmed to a small safety margin so a random phase between the streams adds no
+  latency; an underrun plays one block of silence and raises the margin. With ASIO both
+  callbacks run in the driver's cycle, input first, so the ring adds nothing.
+- `klirr-native measure` runs the same loopback probe as the web app, for a direct
+  browser-vs-native comparison.
 - The webview only shows the UI and sends parameter changes to the Rust side.
 - Installers are small (≈3–10 MB) because no browser is bundled.
 - **Distribution:** `tauri-action` builds Windows/macOS/Linux installers on a release tag and
   attaches them to a GitHub Release. Download button →
   `github.com/MaximBecht/klirr/releases/latest` (or `/releases/latest/download/<file>` with fixed
   asset names). Tauri's updater can read from the same releases. No Google Drive.
+- **Licensing per target.** The ASIO SDK is dual-licensed since October 2025: proprietary or
+  GPLv3. GPL obligations attach to the binaries that contain the SDK, not to the repository:
+  - The source stays **MIT** everywhere. The SDK is not in the repository; the `asio` build
+    feature downloads it at build time.
+  - **Web, macOS and Linux** builds contain no ASIO and stay **MIT**.
+  - The **Windows build with `--features asio`** is a combined work with the SDK and is
+    distributed under **GPLv3** (MIT code may be combined into a GPLv3 work). The installer
+    ships the GPLv3 text, a notice naming the SDK, and a link to the exact source tag with
+    build steps; all dependencies of that build must be GPLv3-compatible (MIT and Apache-2.0
+    are). The "ASIO" name and logo follow Steinberg's trademark rules.
+  - Optional: a WASAPI-only Windows build that stays MIT, for anyone who needs that.
+  - Alternative: sign Steinberg's proprietary ASIO license instead, which keeps the Windows
+    binary MIT as well.
 - **Code signing:** unsigned Windows installers show a SmartScreen warning (SignPath offers
   free signing for open source; Azure Trusted Signing ≈ $10/month). macOS needs an Apple
   Developer account ($99/year) for signing + notarisation. It is fine to launch unsigned first.
@@ -253,7 +281,11 @@ high-gain stage measures around −22 dB.
 - [ ] Make the GitHub repository public
 
 ### Phase 4 — Desktop app
-- [ ] Tauri app with `cpal` audio backend
+- [x] Native audio host (`crates/klirr-native`, `cpal`): WASAPI, optional ASIO, Core Audio,
+  ALSA/JACK; `devices`, `measure` (loopback probe, same as the web) and `play` commands
+- [ ] Measure native vs browser latency on real hardware (WASAPI, ASIO)
+- [ ] Optional WASAPI exclusive backend (raw WASAPI, Windows only)
+- [ ] Tauri app with the `cpal` audio backend
 - [ ] Release workflow → GitHub Releases, download button on the site
 - [ ] Code signing
 
@@ -266,5 +298,6 @@ high-gain stage measures around −22 dB.
 ## 9. Open questions
 
 - Is "Klirr" free to use? (EUIPO/USPTO, GitHub, crates.io, npm, domains)
-- Steinberg ASIO SDK license, before shipping ASIO in the desktop app.
+- Steinberg ASIO SDK license for the Windows release: GPLv3 for the ASIO build (see
+  section 6) or Steinberg's proprietary agreement. Decide before the first Windows release.
 - Code-signing route for Windows (SignPath vs. Azure Trusted Signing).

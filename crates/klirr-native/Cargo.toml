@@ -1,0 +1,22 @@
+[package]
+name = "klirr-native"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Native audio host of Klirr: the DSP core on WASAPI, ASIO, Core Audio, ALSA or JACK"
+publish = false
+
+[dependencies]
+klirr-dsp = { path = "../klirr-dsp" }
+cpal = "0.18"
+rtrb = "0.4"
+hound = "3.5"
+
+[features]
+# ASIO on Windows. Needs LLVM (libclang) to build; see the README.
+asio = ["cpal/asio"]
+
+[lints]
+workspace = true
