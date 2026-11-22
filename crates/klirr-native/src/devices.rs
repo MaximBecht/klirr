@@ -46,7 +46,7 @@ pub fn hosts() -> Vec<HostInfo> {
         .map(|id| HostInfo {
             id: id.name().to_owned(),
             name: if id.name().eq_ignore_ascii_case("wasapi") {
-                "WASAPI (shared)".to_owned()
+                "WASAPI shared".to_owned()
             } else {
                 id.name().to_owned()
             },
