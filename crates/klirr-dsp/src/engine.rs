@@ -2,7 +2,7 @@
 
 use crate::amp::{AmpChannel, Channel};
 use crate::biquad::{Biquad, Coeffs};
-use crate::cabinet::{Cabinet, CabinetStage, IrError, prepare_custom_ir};
+use crate::cabinet::{Cabinet, CabinetStage, CustomIr, IrError, prepare_custom_ir};
 use crate::delay::Delay;
 use crate::gate::Gate;
 use crate::limiter::Limiter;
@@ -184,6 +184,19 @@ impl Engine {
         let ir = prepare_custom_ir(samples, ir_sample_rate, self.sample_rate)?;
         self.cabinet.set_custom_ir(&ir);
         Ok(())
+    }
+
+    /// Exchanges the custom cabinet IR with `ir`, which was prepared with [`CustomIr::new`]
+    /// for this engine's sample rate. Afterwards `ir` holds the previous IR, so the caller can
+    /// free it off the audio thread. Real-time safe: nothing is allocated or freed.
+    ///
+    /// Returns false, and changes nothing, if `ir` was prepared for another sample rate.
+    pub fn swap_custom_ir(&mut self, ir: &mut CustomIr) -> bool {
+        if ir.sample_rate() != self.sample_rate {
+            return false;
+        }
+        self.cabinet.swap_custom_ir(ir);
+        true
     }
 
     /// Clears all audio state (tails, filters) and jumps every parameter to its target.

@@ -1,6 +1,11 @@
 [workspace]
 resolver = "3"
-members = ["crates/klirr-dsp", "crates/klirr-wasm", "crates/klirr-native"]
+members = [
+    "crates/klirr-dsp",
+    "crates/klirr-wasm",
+    "crates/klirr-native",
+    "desktop/src-tauri",
+]
 
 [workspace.package]
 version = "0.1.0"

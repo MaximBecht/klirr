@@ -4,7 +4,11 @@
 # Node / web (phase 2)
 node_modules/
 dist/
+dist-desktop/
 .wrangler/
+
+# Tauri: generated permission schemas
+/desktop/src-tauri/gen/
 
 # Local reference material, not part of the project
 /legacy/

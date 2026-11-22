@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Klirr",
+  "identifier": "io.github.maximbecht.klirr",
+  "build": {
+    "frontendDist": "../../web/dist-desktop",
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": { "script": "npm run dev:desktop", "cwd": "../../web" },
+    "beforeBuildCommand": { "script": "npm run build:desktop", "cwd": "../../web" }
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Klirr",
+        "width": 1140,
+        "height": 720,
+        "minWidth": 720,
+        "minHeight": 560,
+        "backgroundColor": "#0d0d0f",
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self'; font-src 'self'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Music",
+    "shortDescription": "The free & open-source guitar amp",
+    "longDescription": "Klirr, the free & open-source guitar amp: plug a guitar into your audio interface and play, with the lowest latency your audio driver allows.",
+    "license": "MIT",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

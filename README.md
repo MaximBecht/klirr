@@ -19,8 +19,8 @@ processing happens on your own computer; nothing is uploaded.
 what an amp's gain stage produces.*
 
 > **Status: early development.** The DSP core (`crates/klirr-dsp`) is done and tested. The first
-> version of the web app (`web/`) runs locally; public hosting and a desktop app with lower
-> latency come next. See the [project plan](docs/PLAN.md).
+> versions of the web app (`web/`) and of the desktop app (`desktop/`, lower latency) run
+> locally; public hosting and installers come next. See the [project plan](docs/PLAN.md).
 
 ## Features
 
@@ -47,7 +47,8 @@ input trim → noise gate → high-pass → amp channel (4× oversampled) → to
 crates/klirr-dsp/    DSP core in Rust (shared by the web and desktop versions)
 crates/klirr-wasm/   WebAssembly bridge: a small C ABI around the core for the AudioWorklet
 crates/klirr-native/ native audio host: the core on WASAPI, ASIO, Core Audio, ALSA, JACK
-web/                 web app: Vite + TypeScript UI, AudioWorklet host
+web/                 web app: Vite + TypeScript UI, AudioWorklet host (also the desktop UI)
+desktop/             desktop app (Tauri): the web UI on the native audio host
 docs/                project plan; later user and developer docs
 audio/               your local test recordings (ignored by git)
 ```
@@ -155,8 +156,8 @@ npm run build          # production build into web/dist/
 WASAPI (shared mode) on Windows, optionally ASIO; Core Audio on macOS; ALSA or JACK on Linux. On
 Windows it also has a WASAPI exclusive mode of its own, through the
 [wasapi](https://crates.io/crates/wasapi) crate. It is
-the audio side of the planned desktop app, and for now a command-line tool to compare native
-latency with the browser's. Its loopback measurement is the same click probe as the web app's
+the audio side of the desktop app (below), and a command-line tool to compare native latency
+with the browser's. Its loopback measurement is the same click probe as the web app's
 latency panel, so the figures compare directly.
 
 ```sh
@@ -192,6 +193,29 @@ Some drivers use their ASIO buffer size for their Windows (WASAPI) path as well,
 last size an ASIO program set. On a Focusrite Scarlett, WASAPI exclusive measured 11 ms string
 to ear with the driver at 32 frames and 25 ms at 256; shared mode stayed near 89 ms either way.
 Set the buffer small in the interface's control software before measuring or playing.
+
+### Desktop app
+
+`desktop/` is a [Tauri](https://tauri.app) app: the web app's UI in the system webview (WebView2
+on Windows, WebKit on macOS and Linux) and the amp on the native audio host. The webview only
+shows the UI; the audio never passes through it. The UI is `web/`, built with
+`--mode desktop`, which swaps the browser's audio engine for one that drives the native host
+over Tauri's IPC and adds a driver menu (WASAPI shared or exclusive, ASIO, Core Audio, JACK …).
+
+```sh
+cd desktop
+npm install
+npm run dev                        # the app, with the UI served by Vite (hot reload)
+npm run build                      # a release build and installer, in target/release/bundle/
+npm run build -- --features asio   # the same with ASIO (Windows; see above)
+```
+
+You need Node.js 20.19 or newer and the web app's dependencies (`npm install` in `web/`). Rust
+1.90 or newer builds the app. On Linux it also needs WebKitGTK and a few libraries (see
+[Tauri's prerequisites](https://tauri.app/start/prerequisites/#linux)); on Debian or Ubuntu:
+`sudo apt install libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev
+librsvg2-dev libasound2-dev`. The app icons are rendered from `desktop/icon.svg` with
+`npm run icons`.
 
 ## Contributing
 

@@ -18,8 +18,9 @@ describe('settings', () => {
     const s = defaultSettings();
     s.params[P.Gain] = 0.9;
     s.params[P.Channel] = 2;
+    s.host = 'wasapi-exclusive';
     s.inputDeviceId = 'abc';
-    s.inputChannel = 1;
+    s.inputChannel = 5;
     saveSettings(storage, s);
     expect(loadSettings(storage)).toEqual(s);
   });
@@ -33,8 +34,9 @@ describe('settings', () => {
       memoryStorage({
         'klirr.settings.v1': JSON.stringify({
           params: { gain: 7, channel: 1.6, bass_db: 'loud', unknown: 1, bypass: 1 },
-          inputChannel: 5,
+          inputChannel: 1.5,
           outputDeviceId: 42,
+          host: null,
         }),
       }),
     );
@@ -44,6 +46,11 @@ describe('settings', () => {
     expect(s.params).toEqual(expected); // bypass is never restored
     expect(s.inputChannel).toBe(0);
     expect(s.outputDeviceId).toBe('');
+    expect(s.host).toBe('');
+    for (const inputChannel of [-1, 64, '1']) {
+      const stored = JSON.stringify({ inputChannel });
+      expect(loadSettings(memoryStorage({ 'klirr.settings.v1': stored })).inputChannel).toBe(0);
+    }
   });
 
   it('survives a storage that throws', () => {

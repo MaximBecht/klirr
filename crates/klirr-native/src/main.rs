@@ -1,9 +1,5 @@
-//! Klirr's native audio host: the same engine as the web app, on the platform's audio API
-//! (WASAPI shared or exclusive, or ASIO on Windows; Core Audio on macOS; ALSA or JACK on
-//! Linux).
-//!
-//! It is the audio side of the planned desktop app and, for now, a command-line tool to
-//! compare native latency with the browser's:
+//! Command-line front end of Klirr's native audio host (the `klirr_native` library), to
+//! compare native latency with the browser's and to play without the desktop app:
 //!
 //! ```text
 //! klirr-native devices [--host NAME]
@@ -13,12 +9,6 @@
 //!
 //! Device options: `--host NAME`, `--device PART` (input and output), `--input PART`,
 //! `--output PART`, `--channel N` (from 1), `--rate HZ`, `--buffer FRAMES`, `--margin FRAMES`.
-
-mod duplex;
-#[cfg(windows)]
-mod exclusive;
-mod host;
-mod probe;
 
 use std::error::Error;
 use std::process::ExitCode;
@@ -30,8 +20,11 @@ use cpal::{Device, SupportedBufferSize};
 use klirr_dsp::Param;
 use klirr_dsp::util::gain_to_db;
 
-use host::{Duplex, MeasureError, Options};
-use probe::{Failure, PINGS};
+#[cfg(windows)]
+use klirr_native::exclusive;
+use klirr_native::host::{self, Duplex, MeasureError, Options};
+use klirr_native::probe::{Failure, PINGS};
+use klirr_native::{duplex, wav};
 
 const USAGE: &str = "\
 usage:
@@ -251,33 +244,13 @@ fn measure(args: &Args) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn read_mono(path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>> {
-    let mut reader = hound::WavReader::open(path)?;
-    let spec = reader.spec();
-    let channels = usize::from(spec.channels);
-    let interleaved: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader.samples::<f32>().collect::<Result<_, _>>()?,
-        hound::SampleFormat::Int => {
-            let scale = 1.0 / (1_i64 << (spec.bits_per_sample - 1)) as f32;
-            reader
-                .samples::<i32>()
-                .map(|s| s.map(|v| v as f32 * scale))
-                .collect::<Result<_, _>>()?
-        }
-    };
-    Ok((
-        interleaved.chunks(channels).map(|f| f[0]).collect(),
-        spec.sample_rate,
-    ))
-}
-
 fn play(args: &Args) -> Result<(), Box<dyn Error>> {
     let mut params = Vec::new();
     let mut ir = None;
     for setting in &args.settings {
         let (name, value) = setting.split_once('=').ok_or("expected name=value")?;
         if name == "ir" {
-            ir = Some(read_mono(value)?);
+            ir = Some(wav::read_mono(value)?);
             continue;
         }
         let param = Param::ALL

@@ -20,7 +20,9 @@
 //! - Parameter changes glide to their new value instead of jumping.
 //!
 //! The only allocating call is [`Engine::load_custom_ir`]; call it outside the audio callback
-//! (in an `AudioWorklet`, from the message handler, which runs between `process` calls).
+//! (in an `AudioWorklet`, from the message handler, which runs between `process` calls). A
+//! native host prepares a [`CustomIr`] on another thread instead and hands it over with
+//! [`Engine::swap_custom_ir`], which does not allocate.
 //!
 //! ## Example
 //!
@@ -53,6 +55,6 @@ pub mod tone;
 pub mod util;
 
 pub use amp::Channel;
-pub use cabinet::{Cabinet, IrError};
+pub use cabinet::{Cabinet, CustomIr, IrError};
 pub use engine::{Engine, Meters};
 pub use params::{Param, ParamInfo};
