@@ -44,11 +44,12 @@ input trim → noise gate → high-pass → amp channel (4× oversampled) → to
 ## Repository layout
 
 ```
-crates/klirr-dsp/   DSP core in Rust (shared by the web and desktop versions)
-crates/klirr-wasm/  WebAssembly bridge: a small C ABI around the core for the AudioWorklet
-web/                web app: Vite + TypeScript UI, AudioWorklet host
-docs/               project plan; later user and developer docs
-audio/              your local test recordings (ignored by git)
+crates/klirr-dsp/    DSP core in Rust (shared by the web and desktop versions)
+crates/klirr-wasm/   WebAssembly bridge: a small C ABI around the core for the AudioWorklet
+crates/klirr-native/ native audio host (cpal): the core on WASAPI, ASIO, Core Audio, ALSA, JACK
+web/                 web app: Vite + TypeScript UI, AudioWorklet host
+docs/                project plan; later user and developer docs
+audio/               your local test recordings (ignored by git)
 ```
 
 ## Development
@@ -147,6 +148,38 @@ npm run format         # Prettier
 npm run typecheck      # TypeScript
 npm run build          # production build into web/dist/
 ```
+
+### Native audio host
+
+`crates/klirr-native` runs the same engine natively, through [cpal](https://crates.io/crates/cpal):
+WASAPI (shared mode) on Windows, optionally ASIO; Core Audio on macOS; ALSA or JACK on Linux. It is
+the audio side of the planned desktop app, and for now a command-line tool to compare native
+latency with the browser's. Its loopback measurement is the same click probe as the web app's
+latency panel, so the figures compare directly.
+
+```sh
+cargo run --release -p klirr-native -- devices                      # hosts and devices
+cargo run --release -p klirr-native -- measure --device Focusrite   # loopback latency
+cargo run --release -p klirr-native -- play --device Focusrite channel=2 gain=0.7 cabinet=2
+```
+
+`measure` needs a cable from an output of the interface to the selected input (turn direct
+monitoring off). It prints the stream setup, the backend's own latency figures and the measured
+round trip, plus any dropouts. Device options: `--host`, `--device` (input and output),
+`--input`, `--output`, `--channel N` (from 1), `--rate`, `--buffer FRAMES`, `--margin FRAMES`;
+`play` takes the same `name=value` settings as the render example and `ir=path.wav`. On Linux,
+building it needs the ALSA headers (`libasound2-dev`).
+
+- **WASAPI** (default on Windows) runs in shared mode, like the browser: the period is fixed by
+  Windows (usually 10 ms), so expect figures close to the browser's. A device another program
+  holds in exclusive mode (Voicemeeter, a DAW) cannot be opened.
+- **ASIO** talks to the interface's own driver with small buffers. Build with
+  `--features asio` and run with `--host asio --buffer 64` (or 128). The build downloads the
+  Steinberg ASIO SDK and needs LLVM for its bindings (`winget install LLVM.LLVM`, then set
+  `LIBCLANG_PATH` to LLVM's `bin` folder if it is not found). The SDK is not part of this
+  repository. It is dual-licensed (proprietary or GPLv3); only a Windows build with ASIO
+  contains it, so only that binary is affected. The source, the web version and the macOS and
+  Linux builds stay MIT (see the [project plan](docs/PLAN.md), section 6).
 
 ## Contributing
 
