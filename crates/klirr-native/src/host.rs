@@ -35,7 +35,8 @@ const MAX_FRAMES: usize = 8192;
 /// Which devices to open and how.
 #[derive(Clone, Debug, Default)]
 pub struct Options {
-    /// Host (audio API) name, e.g. `wasapi` or `asio`. Default: the platform's default host.
+    /// Host (audio API) name, e.g. `wasapi`, `asio` or `wasapi-exclusive`. Default: the
+    /// platform's default host.
     pub host: Option<String>,
     /// Part of the input device's name. Default: the host's default input.
     pub input: Option<String>,
@@ -45,9 +46,10 @@ pub struct Options {
     pub channel: usize,
     /// Sample rate. Default: the output device's.
     pub rate: Option<u32>,
-    /// Buffer size in frames. Default: the backend's.
+    /// Buffer size in frames (the period, for WASAPI exclusive). Default: the backend's.
     pub buffer: Option<u32>,
-    /// Safety margin between the streams, in frames. Default: none for ASIO, 1 ms otherwise.
+    /// Safety margin between the streams, in frames. Default: none for ASIO and WASAPI
+    /// exclusive, 1 ms otherwise.
     pub margin: Option<usize>,
 }
 
@@ -78,11 +80,66 @@ pub struct Info {
     pub engine_latency: usize,
 }
 
+/// What keeps the audio running; dropping it stops the streams.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one per open device, never moved around"
+)]
+enum Streams {
+    /// Two cpal streams. Output first, so it never waits for input.
+    Cpal { _output: Stream, _input: Stream },
+    /// One thread running both endpoints in WASAPI exclusive mode.
+    #[cfg(windows)]
+    Exclusive { _stream: crate::exclusive::Stream },
+}
+
+/// The engine between the streams, with the ends of its rings the streams and the main
+/// thread use.
+struct Core {
+    processor: Processor,
+    input: rtrb::Producer<f32>,
+    commands: rtrb::Producer<Command>,
+    results: rtrb::Consumer<ProbeResult>,
+    engine_latency: usize,
+}
+
+impl Core {
+    fn new(
+        sample_rate: u32,
+        margin: usize,
+        engine_setup: impl FnOnce(&mut Engine),
+        stats: &Arc<Stats>,
+    ) -> Self {
+        let mut engine = Engine::new(sample_rate as f32);
+        engine_setup(&mut engine);
+        engine.reset();
+        let engine_latency = engine.latency_samples();
+        // One second of input: far more than any sane buffer, so it only fills if the output
+        // stops pulling.
+        let (input, consumer) = rtrb::RingBuffer::new(sample_rate as usize);
+        let (commands, command_rx) = rtrb::RingBuffer::new(4);
+        let (result_tx, results) = rtrb::RingBuffer::new(4);
+        let processor = Processor::new(
+            engine,
+            consumer,
+            command_rx,
+            result_tx,
+            stats.clone(),
+            margin,
+        );
+        Self {
+            processor,
+            input,
+            commands,
+            results,
+            engine_latency,
+        }
+    }
+}
+
 /// A running duplex stream: input → engine → output.
 pub struct Duplex {
-    // Dropping the streams stops them. Output first, so it never waits for input.
-    _output: Stream,
-    _input: Stream,
+    _streams: Streams,
     commands: rtrb::Producer<Command>,
     results: rtrb::Consumer<ProbeResult>,
     /// Figures published by the audio threads.
@@ -91,7 +148,14 @@ pub struct Duplex {
     pub info: Info,
 }
 
-/// Finds a host by name (case-insensitive), or the default host.
+/// Hosts this crate adds to cpal's, by their `--host` names.
+#[cfg(windows)]
+pub const EXTRA_HOSTS: &[&str] = &[crate::exclusive::HOST_ARG];
+/// Hosts this crate adds to cpal's, by their `--host` names.
+#[cfg(not(windows))]
+pub const EXTRA_HOSTS: &[&str] = &[];
+
+/// Finds a cpal host by name (case-insensitive), or the default host.
 pub fn host(name: Option<&str>) -> Result<Host, Box<dyn Error>> {
     let Some(name) = name else {
         return Ok(cpal::default_host());
@@ -100,7 +164,11 @@ pub fn host(name: Option<&str>) -> Result<Host, Box<dyn Error>> {
         .into_iter()
         .find(|id| id.name().eq_ignore_ascii_case(name))
         .ok_or_else(|| {
-            let known: Vec<_> = cpal::available_hosts().iter().map(HostId::name).collect();
+            let known: Vec<_> = cpal::available_hosts()
+                .iter()
+                .map(HostId::name)
+                .chain(EXTRA_HOSTS.iter().copied())
+                .collect();
             let hint = if name.eq_ignore_ascii_case("asio") {
                 " (ASIO needs a build with `--features asio`)"
             } else {
@@ -149,6 +217,14 @@ impl Duplex {
         options: &Options,
         engine_setup: impl FnOnce(&mut Engine),
     ) -> Result<Self, Box<dyn Error>> {
+        #[cfg(windows)]
+        if options
+            .host
+            .as_deref()
+            .is_some_and(crate::exclusive::is_host)
+        {
+            return Self::open_exclusive(options, engine_setup);
+        }
         let host = host(options.host.as_deref())?;
         let is_asio = host.id().name().eq_ignore_ascii_case("asio");
         let input_device = match &options.input {
@@ -190,30 +266,13 @@ impl Duplex {
             .into());
         }
 
-        let mut engine = Engine::new(sample_rate as f32);
-        engine_setup(&mut engine);
-        engine.reset();
-        let engine_latency = engine.latency_samples();
-
         let stats = Arc::new(Stats::default());
-        // One second of input: far more than any sane buffer, so it only fills if the output
-        // stops pulling.
-        let (producer, consumer) = rtrb::RingBuffer::new(sample_rate as usize);
-        let (commands, command_rx) = rtrb::RingBuffer::new(4);
-        let (result_tx, results) = rtrb::RingBuffer::new(4);
         let margin = options.margin.unwrap_or(if is_asio {
             0
         } else {
             sample_rate as usize / 1000
         });
-        let processor = Processor::new(
-            engine,
-            consumer,
-            command_rx,
-            result_tx,
-            stats.clone(),
-            margin,
-        );
+        let core = Core::new(sample_rate, margin, engine_setup, &stats);
 
         // Input first: with ASIO, callbacks run in the order the streams were built, so the
         // output finds this cycle's input already waiting.
@@ -224,7 +283,7 @@ impl Duplex {
                 &input_device,
                 in_config,
                 options.channel,
-                producer,
+                core.input,
                 stats.clone()
             )
         )
@@ -232,7 +291,7 @@ impl Duplex {
         let output = by_format!(
             out_default.sample_format(),
             "output",
-            output_stream(&output_device, out_config, processor, stats.clone())
+            output_stream(&output_device, out_config, core.processor, stats.clone())
         )
         .map_err(|e| opening("output", &output_device, &e))?;
         input
@@ -253,13 +312,50 @@ impl Duplex {
             sample_rate,
             input_buffer: input.buffer_size().ok(),
             output_buffer: output.buffer_size().ok(),
-            engine_latency,
+            engine_latency: core.engine_latency,
         };
         Ok(Self {
-            _output: output,
-            _input: input,
-            commands,
-            results,
+            _streams: Streams::Cpal {
+                _output: output,
+                _input: input,
+            },
+            commands: core.commands,
+            results: core.results,
+            stats,
+            info,
+        })
+    }
+
+    /// [`Duplex::open`] for WASAPI exclusive mode.
+    #[cfg(windows)]
+    fn open_exclusive(
+        options: &Options,
+        engine_setup: impl FnOnce(&mut Engine),
+    ) -> Result<Self, Box<dyn Error>> {
+        let stats = Arc::new(Stats::default());
+        let pending = crate::exclusive::open(options, stats.clone())?;
+        let s = pending.setup.clone();
+        // Both endpoints run in one cycle, input first, as with ASIO.
+        let margin = options.margin.unwrap_or(0);
+        let core = Core::new(s.sample_rate, margin, engine_setup, &stats);
+        let stream = pending.start(core.processor, core.input)?;
+        let info = Info {
+            host: crate::exclusive::HOST_NAME,
+            input: s.input,
+            output: s.output,
+            input_channels: s.input_channels,
+            output_channels: s.output_channels,
+            input_format: s.input_format,
+            output_format: s.output_format,
+            sample_rate: s.sample_rate,
+            input_buffer: Some(s.input_buffer),
+            output_buffer: Some(s.output_buffer),
+            engine_latency: core.engine_latency,
+        };
+        Ok(Self {
+            _streams: Streams::Exclusive { _stream: stream },
+            commands: core.commands,
+            results: core.results,
             stats,
             info,
         })

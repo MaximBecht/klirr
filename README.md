@@ -46,7 +46,7 @@ input trim → noise gate → high-pass → amp channel (4× oversampled) → to
 ```
 crates/klirr-dsp/    DSP core in Rust (shared by the web and desktop versions)
 crates/klirr-wasm/   WebAssembly bridge: a small C ABI around the core for the AudioWorklet
-crates/klirr-native/ native audio host (cpal): the core on WASAPI, ASIO, Core Audio, ALSA, JACK
+crates/klirr-native/ native audio host: the core on WASAPI, ASIO, Core Audio, ALSA, JACK
 web/                 web app: Vite + TypeScript UI, AudioWorklet host
 docs/                project plan; later user and developer docs
 audio/               your local test recordings (ignored by git)
@@ -152,7 +152,9 @@ npm run build          # production build into web/dist/
 ### Native audio host
 
 `crates/klirr-native` runs the same engine natively, through [cpal](https://crates.io/crates/cpal):
-WASAPI (shared mode) on Windows, optionally ASIO; Core Audio on macOS; ALSA or JACK on Linux. It is
+WASAPI (shared mode) on Windows, optionally ASIO; Core Audio on macOS; ALSA or JACK on Linux. On
+Windows it also has a WASAPI exclusive mode of its own, through the
+[wasapi](https://crates.io/crates/wasapi) crate. It is
 the audio side of the planned desktop app, and for now a command-line tool to compare native
 latency with the browser's. Its loopback measurement is the same click probe as the web app's
 latency panel, so the figures compare directly.
@@ -173,6 +175,11 @@ building it needs the ALSA headers (`libasound2-dev`).
 - **WASAPI** (default on Windows) runs in shared mode, like the browser: the period is fixed by
   Windows (usually 10 ms), so expect figures close to the browser's. A device another program
   holds in exclusive mode (Voicemeeter, a DAW) cannot be opened.
+- **WASAPI exclusive** (`--host wasapi-exclusive`) bypasses the Windows mixer and uses the
+  device's smallest period (often 3 ms), with no SDK and no extra build step. It takes the
+  device away from every other program while it runs, so close them first (Voicemeeter, a
+  DAW, browser tabs); `devices --host wasapi-exclusive` shows what each device accepts.
+  `--buffer FRAMES` sets the period.
 - **ASIO** talks to the interface's own driver with small buffers. Build with
   `--features asio` and run with `--host asio --buffer 64` (or 128). The build downloads the
   Steinberg ASIO SDK and needs LLVM for its bindings (`winget install LLVM.LLVM`, then set
@@ -180,6 +187,11 @@ building it needs the ALSA headers (`libasound2-dev`).
   repository. It is dual-licensed (proprietary or GPLv3); only a Windows build with ASIO
   contains it, so only that binary is affected. The source, the web version and the macOS and
   Linux builds stay MIT (see the [project plan](docs/PLAN.md), section 6).
+
+Some drivers use their ASIO buffer size for their Windows (WASAPI) path as well, and keep the
+last size an ASIO program set. On a Focusrite Scarlett, WASAPI exclusive measured 11 ms string
+to ear with the driver at 32 frames and 25 ms at 256; shared mode stayed near 89 ms either way.
+Set the buffer small in the interface's control software before measuring or playing.
 
 ## Contributing
 
