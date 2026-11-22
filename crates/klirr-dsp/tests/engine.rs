@@ -6,7 +6,7 @@ use common::*;
 use klirr_dsp::cabinet::{generate_ir, magnitude_at};
 use klirr_dsp::limiter::CEILING_DB;
 use klirr_dsp::util::db_to_gain;
-use klirr_dsp::{Cabinet, Engine, IrError, Param};
+use klirr_dsp::{Cabinet, CustomIr, Engine, IrError, Param};
 
 #[test]
 fn limiter_keeps_output_under_the_ceiling() {
@@ -87,6 +87,37 @@ fn custom_ir_is_loaded_resampled_and_used() {
     assert_eq!(engine.load_custom_ir(&ir, 44_100.0), Ok(()));
     let out = render(&mut engine, &plucks(secs(0.5)));
     assert!(rms(&out) > 1e-3);
+}
+
+#[test]
+fn a_prepared_ir_swaps_in_and_hands_back_the_previous_one() {
+    let input = plucks(secs(0.5));
+    let ir: Vec<f32> = (0..2000).map(|n| (-(n as f32) / 200.0).exp()).collect();
+    let mut loaded = engine_with(&[(Param::Cabinet, 3.0)]);
+    loaded.load_custom_ir(&ir, 44_100.0).unwrap();
+    loaded.reset();
+    let expected = render(&mut loaded, &input);
+
+    let mut engine = engine_with(&[(Param::Cabinet, 3.0)]);
+    let mut prepared = CustomIr::new(&ir, 44_100.0, SR).unwrap();
+    assert!(engine.swap_custom_ir(&mut prepared));
+    engine.reset();
+    assert_eq!(render(&mut engine, &input), expected);
+
+    // The previous IR comes back: swapping it in again restores it.
+    let mut other = CustomIr::new(&[1.0, 0.5, 0.25], SR, SR).unwrap();
+    assert!(engine.swap_custom_ir(&mut other));
+    assert!(engine.swap_custom_ir(&mut other));
+    engine.reset();
+    assert_eq!(render(&mut engine, &input), expected);
+}
+
+#[test]
+fn an_ir_prepared_for_another_rate_is_refused() {
+    let mut engine = Engine::new(SR);
+    let mut ir = CustomIr::new(&[1.0, 0.5], SR, 44_100.0).unwrap();
+    assert!(!engine.swap_custom_ir(&mut ir));
+    assert_eq!(ir.sample_rate(), 44_100.0);
 }
 
 #[test]

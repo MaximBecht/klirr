@@ -29,6 +29,7 @@ use wasapi::{
     Handle, SampleType, ShareMode, StreamMode, WasapiError, WaveFormat,
 };
 
+use crate::devices::{DeviceInfo, DeviceList};
 use crate::duplex::{Processor, Stats};
 use crate::host::Options;
 
@@ -299,14 +300,22 @@ fn find_device(
         .map_err(|e| format!("could not list {kind} devices: {e}"))?;
     let part_lower = part.to_lowercase();
     let mut names = Vec::new();
+    let mut partial = None;
     let count = devices.get_nbr_devices().map_err(|e| e.to_string())?;
     for i in 0..count {
         let device = devices.get_device_at_index(i).map_err(|e| e.to_string())?;
         let name = device.get_friendlyname().unwrap_or_default();
-        if name.to_lowercase().contains(&part_lower) {
+        // An exact name wins over a device whose name only contains it.
+        if name == part {
             return Ok(device);
         }
+        if partial.is_none() && name.to_lowercase().contains(&part_lower) {
+            partial = Some(device);
+        }
         names.push(name);
+    }
+    if let Some(device) = partial {
+        return Ok(device);
     }
     Err(format!(
         "no {kind} device matches {part:?}; available: {}",
@@ -706,21 +715,67 @@ impl FillTarget {
     }
 }
 
-/// Lines describing what exclusive mode can open, for the `devices` command. Runs on its own
-/// thread, so COM is set up the way this module needs it.
-pub fn describe_devices() -> Result<Vec<String>, Box<dyn Error>> {
+/// Runs `f` on a new thread with COM set up the way this module needs it.
+fn on_com_thread<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, WasapiError> + Send + 'static,
+) -> Result<T, Box<dyn Error>> {
     let thread = std::thread::spawn(|| {
         if wasapi::initialize_mta().is_err() {
             return Err("could not initialise COM".to_owned());
         }
-        let lines = list_devices().map_err(|e| e.to_string());
+        let result = f().map_err(|e| e.to_string());
         wasapi::deinitialize();
-        lines
+        result
     });
     match thread.join() {
-        Ok(lines) => Ok(lines?),
+        Ok(result) => Ok(result?),
         Err(_) => Err("listing the WASAPI exclusive devices failed".into()),
     }
+}
+
+/// Lines describing what exclusive mode can open, for the `devices` command.
+///
+/// # Errors
+///
+/// If the devices cannot be listed.
+pub fn describe_devices() -> Result<Vec<String>, Box<dyn Error>> {
+    on_com_thread(list_devices)
+}
+
+/// The devices exclusive mode can try to open (the same as shared mode's), with the
+/// channels of their shared-mode format.
+///
+/// # Errors
+///
+/// If the devices cannot be listed.
+pub fn devices() -> Result<DeviceList, Box<dyn Error>> {
+    on_com_thread(|| {
+        let enumerator = DeviceEnumerator::new()?;
+        let mut list = DeviceList::default();
+        for (out, direction) in [
+            (&mut list.inputs, Direction::Capture),
+            (&mut list.outputs, Direction::Render),
+        ] {
+            let default = enumerator
+                .get_default_device(direction)
+                .and_then(|d| d.get_id())
+                .ok();
+            let devices = enumerator.get_device_collection(direction)?;
+            for i in 0..devices.get_nbr_devices()? {
+                let device = devices.get_device_at_index(i)?;
+                let channels = device
+                    .get_iaudioclient()
+                    .and_then(|c| c.get_mixformat())
+                    .map_or(0, |f| f.get_nchannels());
+                out.push(DeviceInfo {
+                    name: device.get_friendlyname().unwrap_or_default(),
+                    channels,
+                    is_default: device.get_id().ok() == default,
+                });
+            }
+        }
+        Ok(list)
+    })
 }
 
 fn list_devices() -> Result<Vec<String>, WasapiError> {

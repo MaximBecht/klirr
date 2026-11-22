@@ -28,7 +28,8 @@ pub enum Cabinet {
     Combo1x12 = 1,
     /// Closed-back 4×12 stack: tight thump, strong upper-mid bite.
     Stack4x12 = 2,
-    /// The impulse response loaded with [`crate::Engine::load_custom_ir`].
+    /// The impulse response loaded with [`crate::Engine::load_custom_ir`] or
+    /// [`crate::Engine::swap_custom_ir`].
     Custom = 3,
 }
 
@@ -151,6 +152,33 @@ pub fn prepare_custom_ir(
     Ok(ir)
 }
 
+/// A custom impulse response, prepared for an engine at one sample rate.
+///
+/// Preparing allocates, so a host that loads IRs while audio runs builds this off the audio
+/// thread and hands it over with [`crate::Engine::swap_custom_ir`], which does not allocate.
+#[derive(Debug)]
+pub struct CustomIr {
+    convolver: Convolver,
+    sample_rate: f32,
+}
+
+impl CustomIr {
+    /// Validates, resamples, truncates and normalises `samples` (at `ir_sample_rate`) for an
+    /// engine running at `sample_rate`. Allocates.
+    pub fn new(samples: &[f32], ir_sample_rate: f32, sample_rate: f32) -> Result<Self, IrError> {
+        let ir = prepare_custom_ir(samples, ir_sample_rate, sample_rate)?;
+        Ok(Self {
+            convolver: Convolver::new(&ir),
+            sample_rate,
+        })
+    }
+
+    /// The engine sample rate this IR was prepared for.
+    pub fn sample_rate(&self) -> f32 {
+        self.sample_rate
+    }
+}
+
 /// Applies a raised-cosine fade over the last `fraction` of the IR (no truncation click).
 fn fade_out(ir: &mut [f32], fraction: f32) {
     let n = ir.len();
@@ -227,6 +255,14 @@ impl CabinetStage {
     /// Replaces the custom IR (already prepared with [`prepare_custom_ir`]). Allocates.
     pub fn set_custom_ir(&mut self, ir: &[f32]) {
         self.convolvers[2] = Convolver::new(ir);
+        self.has_custom = true;
+        self.select(self.selected);
+    }
+
+    /// Exchanges the custom IR with `ir`: afterwards `ir` holds the previous one (an empty
+    /// convolver if there was none). Real-time safe: nothing is allocated or freed.
+    pub fn swap_custom_ir(&mut self, ir: &mut CustomIr) {
+        std::mem::swap(&mut self.convolvers[2], &mut ir.convolver);
         self.has_custom = true;
         self.select(self.selected);
     }

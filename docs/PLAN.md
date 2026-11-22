@@ -78,8 +78,8 @@ klirr/
 │   ├── klirr-dsp/        # Pure Rust DSP core: no I/O, no allocation while processing
 │   ├── klirr-wasm/       # C-ABI exports of the core for the AudioWorklet
 │   └── klirr-native/     # Native audio host (cpal); the desktop app's audio side
-├── web/                  # Vite + TypeScript UI, AudioWorklet host
-├── desktop/              # (phase 4) Tauri app
+├── web/                  # Vite + TypeScript UI, AudioWorklet host; also the desktop UI
+├── desktop/              # Tauri app: the web UI on the native audio host
 ├── docs/                 # This plan; later user and developer docs
 └── .github/workflows/    # CI/CD
 ```
@@ -226,7 +226,15 @@ high-gain stage measures around −22 dB.
   callbacks run in the driver's cycle, input first, so the ring adds nothing.
 - `klirr-native measure` runs the same loopback probe as the web app, for a direct
   browser-vs-native comparison.
-- The webview only shows the UI and sends parameter changes to the Rust side.
+- The webview only shows the UI and sends parameter changes to the Rust side. The UI is
+  `web/` built with `vite --mode desktop`: an `AmpEngine` interface has two implementations,
+  the browser's (`AudioEngine`, AudioWorklet + wasm) and the desktop's (`NativeEngine`, Tauri
+  IPC), and each build contains only its own. One controller thread in `desktop/src-tauri`
+  owns the cpal streams (which must stay on the thread that opened them); commands send it
+  requests. Parameters reach the audio thread through a lock-free command ring. A custom IR
+  is prepared off the audio thread (`klirr_dsp::CustomIr`) and swapped in, the old one sent
+  back to be freed, so the audio thread never allocates. Meters go to the webview 30 times a
+  second over a Tauri channel, latency figures once a second.
 - Installers are small (≈3–10 MB) because no browser is bundled.
 - **Distribution:** `tauri-action` builds Windows/macOS/Linux installers on a release tag and
   attaches them to a GitHub Release. Download button →
@@ -297,7 +305,10 @@ high-gain stage measures around −22 dB.
   ALSA/JACK; `devices`, `measure` (loopback probe, same as the web) and `play` commands
 - [ ] Measure native vs browser latency on real hardware (WASAPI, ASIO)
 - [x] Optional WASAPI exclusive backend (`wasapi` crate, Windows only)
-- [ ] Tauri app with the `cpal` audio backend
+- [x] Tauri app with the `cpal` audio backend (`desktop/`): the web UI with a driver menu,
+  live parameters and IRs, meters, latency estimate and loopback measurement
+- [ ] Desktop: buffer size and sample rate menus, device hot-plug events, ASIO in a release
+  build
 - [ ] Release workflow → GitHub Releases, download button on the site
 - [ ] Code signing
 

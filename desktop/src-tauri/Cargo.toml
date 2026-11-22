@@ -1,0 +1,30 @@
+[package]
+name = "klirr-desktop"
+description = "Klirr desktop app: the web UI in the system webview, the amp on the native audio host"
+version.workspace = true
+edition.workspace = true
+# Tauri needs a newer Rust than the DSP core (whose minimum CI checks).
+rust-version = "1.90"
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "klirr"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.5", features = [] }
+
+[dependencies]
+klirr-dsp = { path = "../../crates/klirr-dsp" }
+klirr-native = { path = "../../crates/klirr-native" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2.12", features = [] }
+
+[features]
+# ASIO on Windows. Needs LLVM (libclang) to build; see the README.
+asio = ["klirr-native/asio"]
+
+[lints]
+workspace = true

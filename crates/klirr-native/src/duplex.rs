@@ -16,9 +16,9 @@
 //! With WASAPI they run on two threads and the slack is whatever their phase offset needs.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use klirr_dsp::Engine;
+use klirr_dsp::{CustomIr, Engine, Param};
 
 use crate::probe::{LoopbackProbe, ProbeResult};
 
@@ -34,10 +34,24 @@ const UNDERRUN_HEADROOM: usize = 16;
 const METER_HZ: f32 = 30.0;
 
 /// Main thread → audio thread.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum Command {
     /// Start a loopback measurement. It replaces the amp's output while it runs.
     Measure,
+    /// Set a parameter.
+    Set(Param, f32),
+    /// Swap in a custom IR, prepared for the engine's sample rate. The box comes back as
+    /// [`Event::Freed`] holding the previous IR, so nothing is freed on the audio thread.
+    Ir(Box<CustomIr>),
+}
+
+/// Audio thread → main thread.
+#[derive(Debug)]
+pub enum Event {
+    /// A loopback measurement is over.
+    Probe(ProbeResult),
+    /// An IR the engine no longer uses, for the main thread to free.
+    Freed(Box<CustomIr>),
 }
 
 /// Figures the audio threads publish for the main thread. Reading them costs the audio
@@ -72,6 +86,8 @@ pub struct Stats {
     pub output_peak: AtomicU32,
     /// Largest limiter gain reduction since the last read, in dB (f32 bits).
     pub limiter_db: AtomicU32,
+    /// Whether the noise gate was open at the last meter reading.
+    pub gate_open: AtomicBool,
 }
 
 impl Stats {
@@ -93,7 +109,7 @@ pub struct Processor {
     engine: Engine,
     input: rtrb::Consumer<f32>,
     commands: rtrb::Consumer<Command>,
-    results: rtrb::Producer<ProbeResult>,
+    events: rtrb::Producer<Event>,
     stats: Arc<Stats>,
     probe: LoopbackProbe,
     probing: bool,
@@ -118,7 +134,7 @@ impl Processor {
         engine: Engine,
         input: rtrb::Consumer<f32>,
         commands: rtrb::Consumer<Command>,
-        results: rtrb::Producer<ProbeResult>,
+        events: rtrb::Producer<Event>,
         stats: Arc<Stats>,
         margin: usize,
     ) -> Self {
@@ -128,7 +144,7 @@ impl Processor {
             engine,
             input,
             commands,
-            results,
+            events,
             stats,
             probe: LoopbackProbe::new(sample_rate),
             probing: false,
@@ -152,6 +168,13 @@ impl Processor {
                 Command::Measure => {
                     self.probe.restart();
                     self.probing = true;
+                }
+                Command::Set(param, value) => self.engine.set_param(param, value),
+                Command::Ir(mut ir) => {
+                    self.engine.swap_custom_ir(&mut ir);
+                    // The ring is drained long before it could fill up; if it ever were full,
+                    // the IR would be freed here, which is slow but harmless.
+                    let _ = self.events.push(Event::Freed(ir));
                 }
             }
         }
@@ -205,7 +228,7 @@ impl Processor {
                     // Drop the clicks the amp heard through the cable (delay and reverb tails).
                     self.engine.reset();
                     // The main thread reads results long before the ring could fill up.
-                    let _ = self.results.push(result);
+                    let _ = self.events.push(Event::Probe(result));
                 }
             } else {
                 o.copy_from_slice(&self.scratch_out[..len]);
@@ -220,6 +243,7 @@ impl Processor {
             Stats::raise(&self.stats.input_peak, m.input_peak);
             Stats::raise(&self.stats.output_peak, m.output_peak);
             Stats::raise(&self.stats.limiter_db, m.limiter_reduction_db);
+            self.stats.gate_open.store(m.gate_open, Ordering::Relaxed);
         }
 
         self.advance_window(n);
@@ -269,7 +293,7 @@ mod tests {
         processor: Processor,
         input: rtrb::Producer<f32>,
         commands: rtrb::Producer<Command>,
-        results: rtrb::Consumer<ProbeResult>,
+        events: rtrb::Consumer<Event>,
         stats: Arc<Stats>,
         /// Output samples waiting to come back through the simulated cable.
         cable: std::collections::VecDeque<f32>,
@@ -281,13 +305,13 @@ mod tests {
         fn new(margin: usize, delay: usize) -> Self {
             let (input, consumer) = rtrb::RingBuffer::new(SR);
             let (commands, command_rx) = rtrb::RingBuffer::new(4);
-            let (result_tx, results) = rtrb::RingBuffer::new(4);
+            let (event_tx, events) = rtrb::RingBuffer::new(4);
             let stats = Arc::new(Stats::default());
             let processor = Processor::new(
                 Engine::new(SR as f32),
                 consumer,
                 command_rx,
-                result_tx,
+                event_tx,
                 stats.clone(),
                 margin,
             );
@@ -295,7 +319,7 @@ mod tests {
                 processor,
                 input,
                 commands,
-                results,
+                events,
                 stats,
                 cable: std::iter::repeat_n(0.0, delay).collect(),
                 connected: true,
@@ -323,7 +347,7 @@ mod tests {
             self.commands.push(Command::Measure).unwrap();
             for _ in 0..10 * SR / block {
                 self.cycle(block, input_first);
-                if let Ok(r) = self.results.pop() {
+                if let Ok(Event::Probe(r)) = self.events.pop() {
                     return r;
                 }
             }
@@ -405,6 +429,41 @@ mod tests {
         }
         assert_eq!(rig.stats.underruns.load(Ordering::Relaxed), 1);
         assert_eq!(rig.stats.margin_frames.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn parameters_and_irs_reach_the_running_engine() {
+        /// Plays half a second of a 440 Hz tone and returns the output peak.
+        fn level(rig: &mut Rig) -> f32 {
+            let mut peak = 0.0_f32;
+            for block in 0..SR / 2 / 128 {
+                for i in 0..128 {
+                    let t = (block * 128 + i) as f32 / SR as f32;
+                    rig.input
+                        .push(0.1 * (std::f32::consts::TAU * 440.0 * t).sin())
+                        .unwrap();
+                }
+                let mut out = vec![0.0; 128];
+                rig.processor.process(&mut out);
+                peak = out.iter().fold(peak, |p, y| p.max(y.abs()));
+            }
+            peak
+        }
+
+        let mut rig = Rig::new(0, 300);
+        let before = level(&mut rig);
+        rig.commands
+            .push(Command::Set(Param::MasterDb, -60.0))
+            .unwrap();
+        level(&mut rig);
+        let after = level(&mut rig);
+        assert!(after < before * 0.01, "{before} -> {after}");
+
+        let ir = CustomIr::new(&[1.0, 0.5], SR as f32, SR as f32).unwrap();
+        rig.commands.push(Command::Ir(Box::new(ir))).unwrap();
+        rig.render(128);
+        // The previous (empty) IR comes back to be freed off the audio thread.
+        assert!(matches!(rig.events.pop(), Ok(Event::Freed(_))));
     }
 
     #[test]

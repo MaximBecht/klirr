@@ -85,6 +85,10 @@
       </header>
 
       <section class="device-row" aria-label="Audio devices">
+        <div class="device-group device-group--narrow" data-desktop hidden>
+          <label class="device-label" for="host">DRIVER</label>
+          <select class="device-select" id="host"></select>
+        </div>
         <div class="device-group">
           <label class="device-label" for="input-device">INPUT</label>
           <select class="device-select" id="input-device"></select>
@@ -165,7 +169,9 @@
 
         <div class="latency-figures">
           <div class="latency-figure">
-            <div class="section-label">ESTIMATE · BROWSER</div>
+            <div class="section-label">
+              ESTIMATE · <span data-web>BROWSER</span><span data-desktop hidden>DRIVER</span>
+            </div>
             <dl class="latency-table">
               <dt>Input</dt>
               <dd id="lat-input">—</dd>
@@ -187,11 +193,17 @@
         </div>
 
         <div class="latency-text">
-          <p>
+          <p data-web>
             <strong>The estimate</strong> adds up what the browser reports. It updates while you
             play and costs nothing, but it misses what the browser does not know: the interface's
             converters and driver buffers and, where Input says “not reported”, the whole input
             side. The real figure is usually higher.
+          </p>
+          <p data-desktop hidden>
+            <strong>The estimate</strong> adds up what the audio driver reports: the input and
+            output buffers, and the wait between them (counted as input). It updates while you play
+            and costs nothing, but it misses what the driver does not report, such as the
+            interface's converters. The real figure is usually a little higher.
           </p>
           <p>
             <strong>The measurement</strong> is the real string-to-ear figure. Connect a cable from
@@ -200,15 +212,46 @@
             clicks for a second or two and times how long each takes to come back. It runs only when
             you press the button and adds nothing to the signal path.
           </p>
-          <p>
+          <p data-web>
             <strong>Dropouts</strong> are counted when the audio thread falls behind and never
             catches up. You may hear a tick or a gap, and the sound that arrived in the meantime now
             waits in a buffer, so the latency grows by that much and stays there. If the latency
             grows and dropouts are counted, close other programs and browser tabs, or try another
             browser. If it grows without dropouts, the browser is adding buffering on its own.
           </p>
+          <p data-desktop hidden>
+            <strong>Dropouts</strong> are counted when the output finds too little input waiting.
+            You hear a short gap, and Klirr keeps a little more input in reserve from then on, so
+            the latency grows by that much and stays there until you engage again. If dropouts keep
+            coming, close other programs that use audio, or choose a larger buffer in your
+            interface's driver settings.
+          </p>
           <h3>What to expect</h3>
-          <ul>
+          <ul data-desktop hidden>
+            <li>
+              <strong>WASAPI exclusive</strong> (Windows) runs your interface at its smallest
+              buffer, without the Windows audio engine in between. It takes the interface for Klirr
+              alone: other programs cannot play on it while Klirr runs.
+            </li>
+            <li>
+              <strong>WASAPI (shared)</strong> goes through the Windows audio engine and lets other
+              programs play along, but it is slow: about 90 ms measured on a Focusrite Scarlett,
+              more than a browser. Use it to try Klirr out, then switch to exclusive or ASIO.
+            </li>
+            <li>
+              <strong>ASIO</strong>, where available, talks to your interface's own driver. Set the
+              buffer size in the driver's control panel.
+            </li>
+            <li>
+              <strong>Core Audio</strong> (macOS) and <strong>JACK</strong> or PipeWire (Linux) run
+              with small buffers for every app; set the buffer size in the system.
+            </li>
+            <li>
+              <strong>Bluetooth</strong> headphones or speakers add 100–300 ms. Use wired
+              headphones, ideally plugged into your interface.
+            </li>
+          </ul>
+          <ul data-web>
             <li>
               <strong>macOS</strong> usually gives the lowest latency. Core Audio lets every app run
               with small buffers, so Safari and Chrome both benefit.
@@ -231,7 +274,7 @@
               programs that use audio.
             </li>
           </ul>
-          <p>
+          <p data-web>
             The planned desktop app talks to ASIO and Core Audio directly and aims for about 5–10
             ms.
           </p>

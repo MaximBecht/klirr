@@ -10,9 +10,9 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
     BufferSize, Device, FromSample, Host, HostId, SampleFormat, SizedSample, Stream, StreamConfig,
 };
-use klirr_dsp::Engine;
+use klirr_dsp::{CustomIr, Engine, Param};
 
-use crate::duplex::{Command, Processor, Stats};
+use crate::duplex::{Command, Event, Processor, Stats};
 use crate::probe::{self, Failure, Measurement, ProbeResult};
 
 /// Calls a stream builder with the Rust sample type for `format`.
@@ -31,6 +31,11 @@ macro_rules! by_format {
 
 /// Output callbacks are processed in pieces of at most this many frames.
 const MAX_FRAMES: usize = 8192;
+/// Commands that can wait for the audio thread at once. Parameter changes come in bursts
+/// while a knob turns, about one per parameter every few milliseconds.
+const COMMAND_SLOTS: usize = 256;
+/// A measurement that has not finished after this long counts as stalled.
+const MEASURE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Which devices to open and how.
 #[derive(Clone, Debug, Default)]
@@ -99,7 +104,7 @@ struct Core {
     processor: Processor,
     input: rtrb::Producer<f32>,
     commands: rtrb::Producer<Command>,
-    results: rtrb::Consumer<ProbeResult>,
+    events: rtrb::Consumer<Event>,
     engine_latency: usize,
 }
 
@@ -117,13 +122,14 @@ impl Core {
         // One second of input: far more than any sane buffer, so it only fills if the output
         // stops pulling.
         let (input, consumer) = rtrb::RingBuffer::new(sample_rate as usize);
-        let (commands, command_rx) = rtrb::RingBuffer::new(4);
-        let (result_tx, results) = rtrb::RingBuffer::new(4);
+        let (commands, command_rx) = rtrb::RingBuffer::new(COMMAND_SLOTS);
+        // Room for every IR that can be queued, so the audio thread never frees one.
+        let (event_tx, events) = rtrb::RingBuffer::new(COMMAND_SLOTS);
         let processor = Processor::new(
             engine,
             consumer,
             command_rx,
-            result_tx,
+            event_tx,
             stats.clone(),
             margin,
         );
@@ -131,7 +137,7 @@ impl Core {
             processor,
             input,
             commands,
-            results,
+            events,
             engine_latency,
         }
     }
@@ -141,7 +147,11 @@ impl Core {
 pub struct Duplex {
     _streams: Streams,
     commands: rtrb::Producer<Command>,
-    results: rtrb::Consumer<ProbeResult>,
+    events: rtrb::Consumer<Event>,
+    /// When the running measurement started, if one runs.
+    measuring: Option<Instant>,
+    /// The result of the last measurement, until it is collected.
+    probe_result: Option<ProbeResult>,
     /// Figures published by the audio threads.
     pub stats: Arc<Stats>,
     /// What was opened.
@@ -156,6 +166,10 @@ pub const EXTRA_HOSTS: &[&str] = &[crate::exclusive::HOST_ARG];
 pub const EXTRA_HOSTS: &[&str] = &[];
 
 /// Finds a cpal host by name (case-insensitive), or the default host.
+///
+/// # Errors
+///
+/// If no available host has that name.
 pub fn host(name: Option<&str>) -> Result<Host, Box<dyn Error>> {
     let Some(name) = name else {
         return Ok(cpal::default_host());
@@ -197,12 +211,21 @@ fn find(
 ) -> Result<Device, Box<dyn Error>> {
     let part_lower = part.to_lowercase();
     let mut names = Vec::new();
+    let mut partial = None;
     for device in devices {
         let n = name(&device);
-        if n.to_lowercase().contains(&part_lower) {
+        // An exact name wins over a device whose name only contains it ("Speakers" over
+        // "Speakers (2)").
+        if n == part {
             return Ok(device);
         }
+        if partial.is_none() && n.to_lowercase().contains(&part_lower) {
+            partial = Some(device);
+        }
         names.push(n);
+    }
+    if let Some(device) = partial {
+        return Ok(device);
     }
     Err(format!(
         "no {kind} device matches {part:?}; available: {}",
@@ -213,6 +236,10 @@ fn find(
 
 impl Duplex {
     /// Opens the devices, starts both streams and runs `engine` between them.
+    ///
+    /// # Errors
+    ///
+    /// If a device cannot be found or opened, or a stream does not start.
     pub fn open(
         options: &Options,
         engine_setup: impl FnOnce(&mut Engine),
@@ -320,7 +347,9 @@ impl Duplex {
                 _input: input,
             },
             commands: core.commands,
-            results: core.results,
+            events: core.events,
+            measuring: None,
+            probe_result: None,
             stats,
             info,
         })
@@ -355,32 +384,97 @@ impl Duplex {
         Ok(Self {
             _streams: Streams::Exclusive { _stream: stream },
             commands: core.commands,
-            results: core.results,
+            events: core.events,
+            measuring: None,
+            probe_result: None,
             stats,
             info,
         })
     }
 
-    /// Measures the latency over a loopback cable. Blocks for one to three seconds.
-    pub fn measure(&mut self) -> Result<Measurement, MeasureError> {
-        while self.results.pop().is_ok() {}
+    /// Sets a parameter on the running engine. Returns false if the audio thread has not
+    /// taken the earlier commands yet (it has stopped, or is far behind); try again later.
+    pub fn set_param(&mut self, param: Param, value: f32) -> bool {
+        self.collect();
+        self.commands.push(Command::Set(param, value)).is_ok()
+    }
+
+    /// Loads a custom cabinet IR (mono samples at `ir_sample_rate`) into the running engine.
+    /// The IR is prepared here; the audio thread only swaps it in.
+    ///
+    /// # Errors
+    ///
+    /// If the IR is invalid, or the audio thread is not taking commands.
+    pub fn load_ir(&mut self, samples: &[f32], ir_sample_rate: f32) -> Result<(), Box<dyn Error>> {
+        self.collect();
+        let ir = CustomIr::new(samples, ir_sample_rate, self.info.sample_rate as f32)?;
+        self.commands
+            .push(Command::Ir(Box::new(ir)))
+            .map_err(|_| "the audio is not running")?;
+        Ok(())
+    }
+
+    /// Starts a loopback measurement; [`Duplex::poll_measure`] collects the result. A
+    /// measurement that is already running starts over.
+    ///
+    /// # Errors
+    ///
+    /// [`MeasureError::Stalled`] if the audio thread is not taking commands.
+    pub fn start_measure(&mut self) -> Result<(), MeasureError> {
+        self.collect();
+        self.probe_result = None;
         self.commands
             .push(Command::Measure)
             .map_err(|_| MeasureError::Stalled)?;
-        let deadline = Instant::now() + Duration::from_secs(15);
-        loop {
-            if let Ok(result) = self.results.pop() {
-                return probe::summarise(
+        self.measuring = Some(Instant::now());
+        Ok(())
+    }
+
+    /// The result of the measurement [`Duplex::start_measure`] started, once it is over.
+    /// None while it runs, or if none was started.
+    pub fn poll_measure(&mut self) -> Option<Result<Measurement, MeasureError>> {
+        let started = self.measuring?;
+        self.collect();
+        if let Some(result) = self.probe_result.take() {
+            self.measuring = None;
+            return Some(
+                probe::summarise(
                     result,
                     f64::from(self.info.sample_rate),
                     self.info.engine_latency,
                 )
-                .map_err(MeasureError::Failed);
-            }
-            if Instant::now() > deadline {
-                return Err(MeasureError::Stalled);
+                .map_err(MeasureError::Failed),
+            );
+        }
+        if started.elapsed() > MEASURE_TIMEOUT {
+            self.measuring = None;
+            return Some(Err(MeasureError::Stalled));
+        }
+        None
+    }
+
+    /// Measures the latency over a loopback cable. Blocks for one to three seconds.
+    ///
+    /// # Errors
+    ///
+    /// If the probe heard nothing usable, or the audio stopped.
+    pub fn measure(&mut self) -> Result<Measurement, MeasureError> {
+        self.start_measure()?;
+        loop {
+            if let Some(result) = self.poll_measure() {
+                return result;
             }
             std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Takes what the audio thread sent back: probe results, and IRs to free.
+    fn collect(&mut self) {
+        while let Ok(event) = self.events.pop() {
+            match event {
+                Event::Probe(result) => self.probe_result = Some(result),
+                Event::Freed(ir) => drop(ir),
+            }
         }
     }
 }

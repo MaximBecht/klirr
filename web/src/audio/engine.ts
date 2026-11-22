@@ -1,47 +1,27 @@
-// Main-thread side of the audio engine: devices, the AudioContext and the worklet node.
+// The browser's audio engine: devices, the AudioContext and the worklet node, which runs the
+// wasm engine on the audio thread.
 
 import wasmUrl from '../wasm/klirr.wasm?url';
 import workletUrl from './worklet.ts?worker&url';
-import type { Meters } from './dsp';
 import { IR_ERRORS } from './dsp';
 import { PROCESSOR_NAME, type FromWorklet, type ToWorklet } from './messages';
 import { DropoutWatch } from './dropouts';
-import { summarise, type Measurement } from './probe';
-import { wavSampleRate } from './wav';
-
-export interface Devices {
-  inputs: MediaDeviceInfo[];
-  outputs: MediaDeviceInfo[];
-}
-
-export interface StartOptions {
-  inputDeviceId: string;
-  outputDeviceId: string;
-  inputChannel: number;
-  params: number[];
-}
-
-export interface Ir {
-  name: string;
-  samples: Float32Array;
-  sampleRate: number;
-}
-
-type State = 'stopped' | 'starting' | 'running';
-
-/** Latency as the browser reports it, in ms. */
-export interface LatencyEstimate {
-  /** Input side, or null where the browser does not report it (Firefox, Safari). */
-  inputMs: number | null;
-  /** Output side: the context's own buffer plus what lies after it. */
-  outputMs: number;
-  /** The engine itself (oversampling filters + cabinet convolution). */
-  engineMs: number;
-  totalMs: number;
-}
+import { decodeIr, type Ir } from './ir';
+import { summarise } from './probe';
+import type {
+  AmpEngine,
+  DeviceInfo,
+  Devices,
+  Dropouts,
+  EngineState,
+  LatencyEstimate,
+  Measurement,
+  Meters,
+  StartOptions,
+} from './types';
 
 /** True if the browser can choose the output device (Chrome, Edge). */
-export const outputSelectionSupported =
+const outputSelectionSupported =
   typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
 
 const PARAM_FLUSH_MS = 15;
@@ -55,13 +35,28 @@ function loadWasm(): Promise<ArrayBuffer> {
   return wasmBytes;
 }
 
-export class AudioEngine {
-  onMeters: (m: Meters) => void = () => undefined;
-  onStateChange: (s: State) => void = () => undefined;
-  /** Called when the browser stops the input (device unplugged, permission revoked). */
-  onInputEnded: () => void = () => undefined;
+/** Turns the browser's device list into the UI's, without the system's alias entries. */
+function toDevices(devices: MediaDeviceInfo[], fallback: string): DeviceInfo[] {
+  return devices
+    .filter((d) => d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
+    .map((d, i) => ({
+      id: d.deviceId,
+      label: d.label || `${fallback} ${String(i + 1)}`,
+      channels: null,
+      isDefault: false,
+    }));
+}
 
-  private state: State = 'stopped';
+export class AudioEngine implements AmpEngine {
+  onMeters: (m: Meters) => void = () => undefined;
+  onStateChange: (s: EngineState) => void = () => undefined;
+  onDeviceLost: (message: string) => void = () => undefined;
+
+  readonly canChooseOutput = outputSelectionSupported;
+  readonly labelsNeedPermission = true;
+  readonly estimateSource = 'the browser';
+
+  private state: EngineState = 'stopped';
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
@@ -81,15 +76,28 @@ export class AudioEngine {
   }
 
   /** Lists audio devices. Labels are empty until the user has allowed microphone access. */
-  static async listDevices(): Promise<Devices> {
+  async listDevices(): Promise<Devices> {
     const all = await navigator.mediaDevices.enumerateDevices();
     return {
-      inputs: all.filter((d) => d.kind === 'audioinput'),
-      outputs: all.filter((d) => d.kind === 'audiooutput'),
+      inputs: toDevices(
+        all.filter((d) => d.kind === 'audioinput'),
+        'Input',
+      ),
+      outputs: toDevices(
+        all.filter((d) => d.kind === 'audiooutput'),
+        'Output',
+      ),
     };
   }
 
-  /** Must be called from a user gesture (click), so the browser lets audio start. */
+  watchDevices(onChange: () => void): void {
+    navigator.mediaDevices.addEventListener('devicechange', onChange);
+  }
+
+  describeRunning(): string | null {
+    return null;
+  }
+
   async start(opts: StartOptions): Promise<void> {
     if (this.state !== 'stopped') return;
     this.setState('starting');
@@ -197,13 +205,15 @@ export class AudioEngine {
     }, PARAM_FLUSH_MS);
   }
 
-  setInputChannel(channel: number): void {
+  setInputChannel(channel: number): Promise<void> {
     this.post({ type: 'input-channel', channel });
+    return Promise.resolve();
   }
 
   /** Switches the input device while running. */
-  async setInputDevice(deviceId: string): Promise<void> {
+  async setInputDevice(deviceId: string, channel: number): Promise<void> {
     if (!this.ctx || this.state !== 'running') return;
+    void this.setInputChannel(channel);
     const stream = await openInput(deviceId);
     this.stream?.getTracks().forEach((t) => {
       t.onended = null;
@@ -242,11 +252,8 @@ export class AudioEngine {
     return { inputMs, outputMs, engineMs, totalMs: (inputMs ?? 0) + outputMs + engineMs };
   }
 
-  /**
-   * Times the audio fell behind for good since audio started, and the latency that added.
-   * Null when not running.
-   */
-  dropouts(): { count: number; addedMs: number } | null {
+  /** Times the audio fell behind for good since audio started, and the latency that added. */
+  dropouts(): Dropouts | null {
     if (this.state !== 'running') return null;
     return { count: this.dropoutWatch.count, addedMs: this.dropoutWatch.addedMs };
   }
@@ -275,25 +282,8 @@ export class AudioEngine {
     return result;
   }
 
-  get irName(): string | null {
-    return this.ir?.name ?? null;
-  }
-
-  /**
-   * Decodes an impulse response (any format the browser decodes, normally WAV) and loads it.
-   * The file is read locally; nothing is uploaded. Resolves once the engine accepted it, or
-   * right away when audio is not running (it is loaded on the next start).
-   */
   async loadIr(name: string, bytes: ArrayBuffer): Promise<void> {
-    const rate = wavSampleRate(bytes) ?? this.ctx?.sampleRate ?? 48000;
-    // Decode at the file's own rate; the engine resamples once, to the context rate.
-    const decoder = new OfflineAudioContext(1, 1, Math.min(384000, Math.max(8000, rate)));
-    const buffer = await decoder.decodeAudioData(bytes);
-    const ir: Ir = {
-      name,
-      samples: buffer.getChannelData(0).slice(),
-      sampleRate: buffer.sampleRate,
-    };
+    const ir = await decodeIr(name, bytes, this.ctx?.sampleRate ?? 48000);
     if (!this.node) {
       this.ir = ir;
       return;
@@ -317,7 +307,9 @@ export class AudioEngine {
     this.source.connect(this.node);
     for (const t of stream.getAudioTracks()) {
       t.onended = () => {
-        this.onInputEnded();
+        this.onDeviceLost(
+          'The input device stopped (unplugged?). Choose another input or engage again.',
+        );
       };
     }
   }
@@ -335,9 +327,23 @@ export class AudioEngine {
     this.node?.port.postMessage(msg, transfer);
   }
 
-  private setState(s: State): void {
+  private setState(s: EngineState): void {
     this.state = s;
     this.onStateChange(s);
+  }
+
+  describeError(err: unknown): string {
+    if (err instanceof DOMException) {
+      switch (err.name) {
+        case 'NotAllowedError':
+          return 'Microphone access was blocked. Allow it in the address bar, then try again.';
+        case 'NotFoundError':
+          return 'No audio input found. Connect your interface or enable line-in.';
+        case 'NotReadableError':
+          return 'The input is in use by another program, or the driver refused to open it.';
+      }
+    }
+    return err instanceof Error ? err.message : String(err);
   }
 }
 
@@ -359,19 +365,4 @@ async function openInput(deviceId: string): Promise<MediaStream> {
     }
     throw err;
   }
-}
-
-/** A message for the user explaining why audio could not start. */
-export function describeStartError(err: unknown): string {
-  if (err instanceof DOMException) {
-    switch (err.name) {
-      case 'NotAllowedError':
-        return 'Microphone access was blocked. Allow it in the address bar, then try again.';
-      case 'NotFoundError':
-        return 'No audio input found. Connect your interface or enable line-in.';
-      case 'NotReadableError':
-        return 'The input is in use by another program, or the driver refused to open it.';
-    }
-  }
-  return err instanceof Error ? err.message : String(err);
 }

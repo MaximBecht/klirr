@@ -14,6 +14,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Linux headers for the native crates: ALSA for cpal (klirr-native), WebKitGTK and friends
+  # for Tauri (klirr-desktop).
+  LINUX_DEPS: >-
+    libasound2-dev libwebkit2gtk-4.1-dev libxdo-dev libssl-dev
+    libayatana-appindicator3-dev librsvg2-dev
 
 jobs:
   lint:
@@ -25,8 +30,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      # cpal (klirr-native) needs the ALSA headers on Linux.
-      - run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+      - run: sudo apt-get update && sudo apt-get install -y $LINUX_DEPS
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo doc --workspace --no-deps --locked
@@ -45,7 +49,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y $LINUX_DEPS
       - run: cargo test --workspace --locked
 
   wasm:
@@ -69,7 +73,7 @@ jobs:
       - run: cargo check -p klirr-dsp -p klirr-wasm --lib --locked
 
   web:
-    name: Web app (lint, types, tests, build, smoke test)
+    name: Web app (lint, types, tests, web and desktop builds, smoke test)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -92,6 +96,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npx vite build
+      # The desktop app's UI: the same sources, with the native engine in place of the wasm one.
+      - run: npx vite build --mode desktop
       # Smoke test: the production build in headless Chromium, fed by a fake microphone.
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e

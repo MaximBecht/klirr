@@ -5,19 +5,27 @@ import '@fontsource/barlow/400.css';
 import '@fontsource/barlow/600.css';
 import './style.css';
 
-import {
-  AudioEngine,
-  describeStartError,
-  outputSelectionSupported,
-  type LatencyEstimate,
-} from './audio/engine';
-import type { Measurement } from './audio/probe';
+import type { HostInfo, NativeEngine } from './audio/native';
+import type {
+  AmpEngine,
+  DeviceInfo,
+  LatencyEstimate,
+  Measurement,
+  StartOptions,
+} from './audio/types';
 import { CABINET_CUSTOM, CABINET_NAMES, CHANNEL_NAMES, P, spec } from './params';
 import { loadSettings, saveSettings } from './settings';
 import * as fmt from './ui/format';
 import { Knob, el, type KnobOptions } from './ui/knob';
 import { Meter } from './ui/meter';
 import { Segmented } from './ui/segmented';
+
+/**
+ * The desktop app's UI (`vite --mode desktop`), whose audio runs on the native host, or the
+ * web app. A build-time constant: each build drops the other's engine. It has to be decided
+ * in this module; Rollup does not follow a constant imported from another one.
+ */
+const DESKTOP = import.meta.env.MODE === 'desktop';
 
 // ── Elements ───────────────────────────────────────────────
 function $(id: string): HTMLElement {
@@ -29,6 +37,7 @@ const app = $('app');
 const tube = document.getElementById('tube') as SVGElement | null;
 const power = $('power');
 const statusText = $('status-text');
+const hostSelect = $('host') as HTMLSelectElement;
 const inputSelect = $('input-device') as HTMLSelectElement;
 const channelSelect = $('input-channel') as HTMLSelectElement;
 const outputSelect = $('output-device') as HTMLSelectElement;
@@ -52,6 +61,27 @@ const irFile = $('ir-file') as HTMLInputElement;
 const irName = $('ir-name');
 const dropOverlay = $('drop-overlay');
 
+// ── Platform ───────────────────────────────────────────────
+// Texts and controls for one platform only: `data-web` (the browser) or `data-desktop`
+// (the desktop app, hidden until shown here).
+for (const e of document.querySelectorAll(DESKTOP ? '[data-web]' : '[data-desktop]')) e.remove();
+for (const e of document.querySelectorAll<HTMLElement>('[data-desktop]')) e.hidden = false;
+
+// The other platform's engine is not in the build at all.
+let engine: AmpEngine;
+/** The desktop app's engine, for its extras (audio hosts); null in the browser. */
+let native: NativeEngine | null = null;
+let hostList: Promise<HostInfo[]> = Promise.resolve([]);
+if (DESKTOP) {
+  const { NativeEngine } = await import('./audio/native');
+  native = new NativeEngine();
+  engine = native;
+  hostList = NativeEngine.hosts();
+} else {
+  const { AudioEngine } = await import('./audio/engine');
+  engine = new AudioEngine();
+}
+
 // ── State ──────────────────────────────────────────────────
 const storage = (() => {
   try {
@@ -64,8 +94,6 @@ const settings = loadSettings(storage);
 // The custom IR itself is not stored, so a stored "custom" cabinet cannot be restored.
 if (settings.params[P.Cabinet] === CABINET_CUSTOM)
   settings.params[P.Cabinet] = spec(P.Cabinet).default;
-
-const engine = new AudioEngine();
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 function persist(): void {
@@ -223,80 +251,121 @@ bypassBtn.addEventListener('click', () => {
 renderBypass();
 
 // ── Devices ────────────────────────────────────────────────
+/** The devices of the current host, as last listed. */
+let inputs: DeviceInfo[] = [];
+
 function fillSelect(
   select: HTMLSelectElement,
-  devices: MediaDeviceInfo[],
+  devices: DeviceInfo[],
   selected: string,
   fallback: string,
 ): void {
-  select.replaceChildren();
-  const def = el('option');
-  def.value = '';
-  def.textContent = fallback;
-  select.append(def);
-  devices
-    .filter((d) => d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
-    .forEach((d, i) => {
-      const o = el('option');
-      o.value = d.deviceId;
-      o.textContent = d.label || `${fallback.replace('System default', 'Device')} ${i + 1}`;
-      select.append(o);
-    });
+  select.replaceChildren(new Option(fallback, ''));
+  for (const d of devices) select.append(new Option(d.label, d.id));
   select.value = selected;
   if (select.value !== selected) select.value = '';
 }
 
+/** Offers the channels the selected input has (two where that is unknown). */
+function fillChannels(): void {
+  const id = inputSelect.value;
+  const device = inputs.find((d) => (id ? d.id === id : d.isDefault));
+  const count = Math.max(1, device?.channels ?? 2);
+  const label = (i: number) =>
+    count === 2 ? (i === 0 ? 'Input 1 (left)' : 'Input 2 (right)') : `Input ${String(i + 1)}`;
+  channelSelect.replaceChildren(
+    ...Array.from({ length: count }, (_, i) => new Option(label(i), String(i))),
+  );
+  channelSelect.value = String(settings.inputChannel);
+  if (channelSelect.value !== String(settings.inputChannel)) channelSelect.value = '0';
+}
+
 async function refreshDevices(): Promise<void> {
   try {
-    const { inputs, outputs } = await AudioEngine.listDevices();
-    fillSelect(inputSelect, inputs, settings.inputDeviceId, 'System default input');
-    if (outputSelectionSupported) {
-      fillSelect(outputSelect, outputs, settings.outputDeviceId, 'System default output');
+    const devices = await engine.listDevices(hostSelect.value);
+    inputs = devices.inputs;
+    fillSelect(inputSelect, devices.inputs, settings.inputDeviceId, 'System default input');
+    if (engine.canChooseOutput) {
+      fillSelect(outputSelect, devices.outputs, settings.outputDeviceId, 'System default output');
     }
-  } catch {
-    say('Could not list audio devices', true);
+  } catch (err) {
+    inputs = [];
+    say(`Could not list audio devices: ${engine.describeError(err)}`, true);
   }
+  fillChannels();
   updateNotice();
 }
 
 function updateNotice(): void {
   const notes: string[] = [];
-  if (!outputSelectionSupported) {
+  if (!engine.canChooseOutput) {
     notes.push(
       'This browser always plays on the system default output. To choose the output device, use Chrome or Edge.',
     );
   }
-  if (engine.running && settings.inputChannel === 1 && engine.inputChannelCount() < 2) {
-    notes.push('This input delivers one channel only, so input 2 is silent. Choose input 1.');
+  const channels = engine.inputChannelCount();
+  if (engine.running && settings.inputChannel >= channels) {
+    notes.push(
+      `This input delivers ${channels === 1 ? 'one channel' : `${String(channels)} channels`} only, so input ${String(settings.inputChannel + 1)} is silent. Choose input 1.`,
+    );
   }
-  if (!engine.running && inputSelect.options.length <= 1) {
+  if (engine.labelsNeedPermission && !engine.running && inputSelect.options.length <= 1) {
     notes.push('Device names appear once you engage and allow audio input.');
+  }
+  if (!engine.labelsNeedPermission && inputSelect.options.length <= 1) {
+    notes.push(
+      'This driver lists no input devices. Connect your interface or choose another driver.',
+    );
   }
   deviceNotice.textContent = notes.join(' ');
   deviceNotice.hidden = notes.length === 0;
 }
 
-if (!outputSelectionSupported) {
+/**
+ * What to start with. The desktop app opens what the menus show: a remembered device or
+ * driver that is not there now would only fail to open. The browser opens the remembered
+ * device, since it lists names only once audio input was allowed.
+ */
+function startOptions(): StartOptions {
+  const options = { ...settings, params: [...settings.params] };
+  options.inputChannel = Number(channelSelect.value);
+  if (DESKTOP) {
+    options.host = hostSelect.value;
+    options.inputDeviceId = inputSelect.value;
+    options.outputDeviceId = outputSelect.value;
+  }
+  return options;
+}
+
+if (!engine.canChooseOutput) {
   outputSelect.replaceChildren(new Option('System default output', ''));
   outputSelect.disabled = true;
 }
-channelSelect.value = String(settings.inputChannel);
+fillChannels();
 
 inputSelect.addEventListener('change', () => {
   settings.inputDeviceId = inputSelect.value;
+  fillChannels();
+  settings.inputChannel = Number(channelSelect.value);
   persist();
   forgetMeasurement();
   engine
-    .setInputDevice(inputSelect.value)
+    .setInputDevice(inputSelect.value, settings.inputChannel)
     .then(updateNotice)
     .catch((err: unknown) => {
-      say(describeStartError(err), true);
+      say(engine.describeError(err), true);
     });
 });
 channelSelect.addEventListener('change', () => {
-  settings.inputChannel = Number(channelSelect.value) === 1 ? 1 : 0;
+  settings.inputChannel = Number(channelSelect.value);
   persist();
-  engine.setInputChannel(settings.inputChannel);
+  forgetMeasurement();
+  engine
+    .setInputChannel(settings.inputChannel)
+    .then(updateNotice)
+    .catch((err: unknown) => {
+      say(engine.describeError(err), true);
+    });
   updateNotice();
 });
 outputSelect.addEventListener('change', () => {
@@ -304,11 +373,38 @@ outputSelect.addEventListener('change', () => {
   persist();
   forgetMeasurement();
   engine.setOutputDevice(outputSelect.value).catch((err: unknown) => {
-    say(`Could not switch output: ${describeStartError(err)}`, true);
+    say(`Could not switch output: ${engine.describeError(err)}`, true);
   });
 });
-navigator.mediaDevices.addEventListener('devicechange', () => {
+engine.watchDevices(() => {
   void refreshDevices();
+});
+
+// The audio host (driver API): desktop only.
+async function fillHosts(): Promise<void> {
+  try {
+    const hosts = await hostList;
+    hostSelect.replaceChildren(...hosts.map((h) => new Option(h.name, h.isDefault ? '' : h.id)));
+  } catch (err) {
+    say(`Could not list audio drivers: ${engine.describeError(err)}`, true);
+  }
+  hostSelect.value = settings.host;
+  if (hostSelect.value !== settings.host) hostSelect.value = '';
+}
+hostSelect.addEventListener('change', () => {
+  settings.host = hostSelect.value;
+  persist();
+  forgetMeasurement();
+  void refreshDevices().then(() => {
+    if (!native) return;
+    const { host, inputDeviceId, outputDeviceId, inputChannel } = startOptions();
+    native
+      .reconfigure({ host, inputDeviceId, outputDeviceId, inputChannel })
+      .then(updateNotice)
+      .catch((err: unknown) => {
+        say(engine.describeError(err), true);
+      });
+  });
 });
 
 // ── Start / stop ───────────────────────────────────────────
@@ -330,21 +426,22 @@ engine.onStateChange = (state) => {
   latMeasureBtn.disabled = state !== 'running' || measuring;
   updateLatency();
 };
-engine.onInputEnded = () => {
-  say('The input device stopped (unplugged?). Choose another input or engage again.', true);
+engine.onDeviceLost = (message) => {
+  say(message, true);
 };
 
 startBtn.addEventListener('click', () => {
   say('Starting…');
   engine
-    .start({ ...settings, params: [...settings.params] })
+    .start(startOptions())
     .then(async () => {
       if (!engine.running) return;
-      say('Ready. Play!');
+      const running = engine.describeRunning();
+      say(running ? `Ready: ${running}. Play!` : 'Ready. Play!');
       await refreshDevices();
     })
     .catch((err: unknown) => {
-      say(describeStartError(err), true);
+      say(engine.describeError(err), true);
     });
 });
 stopBtn.addEventListener('click', () => {
@@ -390,8 +487,7 @@ function updateLatency(): void {
     latencyButton.title = 'Measured over a loopback cable. Click for details.';
   } else if (e) {
     latencyButton.textContent = `LATENCY ≈ ${String(Math.round(e.totalMs))} MS${suffix}`;
-    latencyButton.title =
-      'Estimated from what the browser reports. Click to measure the real figure.';
+    latencyButton.title = `Estimated from what ${engine.estimateSource} reports. Click to measure the real figure.`;
   } else {
     latencyButton.textContent = 'LATENCY INFO';
     latencyButton.title = 'What latency to expect, and how to measure it';
@@ -510,4 +606,5 @@ window.addEventListener('drop', (e) => {
   if (file) void loadIr(file);
 });
 
+if (DESKTOP) await fillHosts();
 void refreshDevices();
