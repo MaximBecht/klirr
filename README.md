@@ -224,6 +224,12 @@ the MIT one. It remembers the choice for updates; `/ASIO=0` or `/ASIO=1` sets it
 installs (`/S`). Its NSIS template is Tauri's, with the changes marked, in
 `desktop/src-tauri/windows/`; the licenses it installs say which build is under which license.
 
+Release builds also install `THIRD-PARTY-NOTICES.txt`: every Rust crate, npm package and
+prebuilt library in the app, with its license text and copyright notices. `npm run notices`
+writes it to `target/notices/` (with [cargo-about](https://github.com/EmbarkStudios/cargo-about):
+`cargo install cargo-about --locked --features cli`), and `--config
+src-tauri/tauri.release.conf.json` adds it to a build; `build:windows` does both.
+
 The **Audio** panel holds the whole audio setup: driver, devices, sample rate, buffer size, the
 latency figures and a test tone. Klirr only asks for a buffer size or sample rate when it opens
 the devices and writes no driver or system settings itself, so nothing it chooses outlives it:

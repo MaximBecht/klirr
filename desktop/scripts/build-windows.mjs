@@ -4,7 +4,7 @@
 // target/release/bundle/nsis/.
 //
 // The ASIO build needs LLVM (LIBCLANG_PATH) and the ASIO SDK (CPAL_ASIO_DIR, or the one asio-sys
-// downloads); see the README.
+// downloads), and the notices need cargo-about; see the README.
 import { execSync } from 'node:child_process';
 import {
     copyFileSync,
@@ -27,7 +27,11 @@ const releaseDir = join(desktopDir, '..', 'target', 'release');
 const run = (command, env = {}) =>
     execSync(command, { cwd: desktopDir, stdio: 'inherit', env: { ...process.env, ...env } });
 
-run('npx tauri build --no-bundle --features asio');
+// Release builds carry the third-party notices (tauri.release.conf.json adds them)
+run('node scripts/notices.mjs');
+const release = '--config src-tauri/tauri.release.conf.json';
+
+run(`npx tauri build ${release} --no-bundle --features asio`);
 const asioDir = join(releaseDir, 'asio');
 mkdirSync(asioDir, { recursive: true });
 const asioExe = join(asioDir, 'klirr.exe');
@@ -45,7 +49,7 @@ if (at < 0 || exe.indexOf(marker, at + 1) >= 0) {
 exe.write('NSS', at + marker.length - 3, 'latin1');
 writeFileSync(asioExe, exe);
 
-run('npx tauri build --bundles nsis', { KLIRR_ASIO_EXE: asioExe });
+run(`npx tauri build ${release} --bundles nsis`, { KLIRR_ASIO_EXE: asioExe });
 
 const mib = (file) => `${(statSync(file).size / 2 ** 20).toFixed(2)} MiB`;
 console.log(`klirr.exe: ${mib(join(releaseDir, 'klirr.exe'))} (MIT), ${mib(asioExe)} (ASIO)`);
