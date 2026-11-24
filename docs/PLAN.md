@@ -295,7 +295,8 @@ high-gain stage measures around −22 dB.
 - **CI (GitHub Actions):** `cargo fmt --check`, `clippy -D warnings`, tests, a
   `wasm32-unknown-unknown` build, and web lint/format/typecheck/test/build/smoke test on every
   push/PR. Desktop release builds on version tags (`release.yml`; a dry run on PRs that touch
-  release files). Later: preview deploy per PR, production deploy on `main` via `wrangler`.
+  release files). Production deploy on `main` via `wrangler` (the `deploy` job, after all
+  other jobs pass). Later: preview deploy per PR.
 - **Merging:** a branch per piece of work, a PR with CI green on all three OSes, merged with
   rebase (straight history on `main`).
 - **Docs:** README to start. When the project grows: a `docs/` folder (user guide, DSP design,
@@ -331,8 +332,11 @@ high-gain stage measures around −22 dB.
 - [x] Trademark / GitHub / crates.io / domain check for "Klirr"
 - [x] Make the GitHub repository public (immutable releases enabled)
 - [x] First public release: **v0.1.0-alpha.1** (desktop, pre-release), published 2026-11-24
-- [ ] Cloudflare deployment of the web app at `klirr.bechtstudio.com` (static assets only,
-  `wrangler` deploy on `main`; needs a Cloudflare API token as a repository secret)
+- [x] Cloudflare deployment of the web app at `klirr.bechtstudio.com`: `web/wrangler.jsonc`
+  (static assets only, custom domain, no `workers.dev` address), security headers in
+  `web/public/_headers`, `deploy` job in `ci.yml` on pushes to `main`
+- [ ] First deploy: add the repository secrets `CLOUDFLARE_API_TOKEN` and
+  `CLOUDFLARE_ACCOUNT_ID`, merge, check the site and its headers
 - [ ] Preview deploys per PR
 - [ ] Product page on bechtstudio.com (`/en/work/klirr`, `/de/arbeit/klirr`) with a "Try in
   browser" button and a Download button to the GitHub releases

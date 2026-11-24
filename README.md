@@ -155,6 +155,12 @@ npm run typecheck      # TypeScript
 npm run build          # production build into web/dist/
 ```
 
+The web app runs at [klirr.bechtstudio.com](https://klirr.bechtstudio.com): CI deploys
+`web/dist/` to Cloudflare (static assets only, `web/wrangler.jsonc`) on every push to `main`,
+once all other checks pass. `web/public/_headers` sets its security headers, among them a
+Content Security Policy that allows only the site's own files. To try a build with those
+headers: `npm run build`, then `npx wrangler dev` (serves http://localhost:8787).
+
 ### Native audio host
 
 `crates/klirr-native` runs the same engine natively, through [cpal](https://crates.io/crates/cpal):

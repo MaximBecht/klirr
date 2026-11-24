@@ -1,0 +1,16 @@
+# Response headers for the Cloudflare deploy (wrangler.jsonc). Vite copies this file into dist/
+# as it is; `vite dev` and `vite preview` ignore it.
+#
+# The CSP allows only the site's own files. 'wasm-unsafe-eval' lets the audio worklet compile
+# the DSP module; data: images are the SVG icons inlined in the CSS. The microphone is the only
+# device the page may ask for.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Permissions-Policy: microphone=(self), camera=(), geolocation=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Content-Type-Options: nosniff
+
+# Vite puts a content hash in every file name under assets/, so a file there never changes.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

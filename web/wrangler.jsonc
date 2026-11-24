@@ -1,0 +1,19 @@
+// The web app on Cloudflare: a Worker with static assets only, no Worker code. Requests to
+// static assets are free and unlimited and never count against the Workers plan limits
+// (docs/PLAN.md, section 5). Do not add `main` or `run_worker_first` here: either would put
+// Worker code on the request path, and every request would then count.
+//
+// Deployed from CI on every push to main (.github/workflows/ci.yml, job "deploy").
+// Locally: `npm run build`, then `npx wrangler dev` serves dist/ with the same headers.
+{
+    "name": "klirr",
+    "compatibility_date": "2026-11-24",
+    "assets": {
+        // Vite's build output; public/_headers sets the security and caching headers.
+        "directory": "./dist",
+    },
+    // Served only at its own address on the bechtstudio.com zone, not at *.workers.dev.
+    "routes": [{ "pattern": "klirr.bechtstudio.com", "custom_domain": true }],
+    "workers_dev": false,
+    "preview_urls": false,
+}
