@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # A newer push to a pull request replaces its run; on main every push is tested and deployed
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -96,6 +97,13 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npx vite build
+      # The tested build is what the deploy job publishes (pushes to main only).
+      - uses: actions/upload-artifact@v7
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: web-dist
+          path: web/dist/
+          retention-days: 7
       # The desktop app's UI: the same sources, with the native engine in place of the wasm one.
       - run: npx vite build --mode desktop
       # Smoke test: the production build in headless Chromium, fed by a fake microphone.
@@ -109,3 +117,32 @@ jobs:
             web/playwright-report/
             web/test-results/
           retention-days: 7
+
+  # The web app at https://klirr.bechtstudio.com: static assets only (web/wrangler.jsonc), and
+  # only once every other job has passed. Needs the repository secrets CLOUDFLARE_API_TOKEN (made
+  # from the "Edit Cloudflare Workers" token template, limited to this account and the
+  # bechtstudio.com zone) and CLOUDFLARE_ACCOUNT_ID.
+  deploy:
+    name: Deploy the web app
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, test, wasm, msrv, web]
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://klirr.bechtstudio.com
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: web-dist
+          path: web/dist/
+      - uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: web
+          wranglerVersion: 4.168.0
+          command: deploy
