@@ -29,31 +29,28 @@ function addText(id, name, text, user) {
 }
 
 // --- Rust crates
-let about;
+// Into a file: cargo-about refuses to write to a pipe when PowerShell started it
+const aboutFile = join(dirname(outFile), 'cargo-about.json');
+mkdirSync(dirname(outFile), { recursive: true });
 try {
-    about = JSON.parse(
-        execFileSync(
-            'cargo',
-            [
-                'about',
-                'generate',
-                '--format',
-                'json',
-                '--locked',
-                '--features',
-                'asio',
-                '-m',
-                join(desktopDir, 'src-tauri', 'Cargo.toml'),
-                '-c',
-                join(desktopDir, 'notices', 'about.toml'),
-            ],
-            {
-                cwd: repoDir,
-                encoding: 'utf8',
-                maxBuffer: 256 * 2 ** 20,
-                stdio: ['ignore', 'pipe', 'inherit'],
-            },
-        ),
+    execFileSync(
+        'cargo',
+        [
+            'about',
+            'generate',
+            '--format',
+            'json',
+            '--locked',
+            '--features',
+            'asio',
+            '-m',
+            join(desktopDir, 'src-tauri', 'Cargo.toml'),
+            '-c',
+            join(desktopDir, 'notices', 'about.toml'),
+            '-o',
+            aboutFile,
+        ],
+        { cwd: repoDir, stdio: 'inherit' },
     );
 } catch (e) {
     console.error(
@@ -61,6 +58,7 @@ try {
     );
     throw e;
 }
+const about = readJson(aboutFile);
 /** crate label -> license ids it is used under */
 const crates = new Map();
 for (const license of about.licenses) {
@@ -170,7 +168,6 @@ for (const t of sorted) {
     );
 }
 
-mkdirSync(dirname(outFile), { recursive: true });
 writeFileSync(outFile, `${out.join('\n').replace(/[ \t]+$/gm, '')}\n`);
 console.log(
     `THIRD-PARTY-NOTICES.txt: ${crates.size} crates, ${packages.size} npm packages, ${texts.size} license texts`,
