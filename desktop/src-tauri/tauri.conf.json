@@ -12,11 +12,13 @@
     "windows": [
       {
         "title": "Klirr",
-        "width": 1140,
-        "height": 720,
-        "minWidth": 720,
-        "minHeight": 560,
-        "backgroundColor": "#0d0d0f",
+        "width": 1100,
+        "height": 480,
+        "visible": false,
+        "resizable": false,
+        "maximizable": false,
+        "theme": "Dark",
+        "backgroundColor": "#16161a",
         "dragDropEnabled": false
       }
     ],
