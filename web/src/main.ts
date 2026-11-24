@@ -9,6 +9,7 @@ import type { HostInfo, NativeEngine } from './audio/native';
 import type {
   AmpEngine,
   DeviceInfo,
+  EngineState,
   LatencyEstimate,
   Measurement,
   StartOptions,
@@ -45,6 +46,10 @@ const startBtn = $('start') as HTMLButtonElement;
 const stopBtn = $('stop') as HTMLButtonElement;
 const bypassBtn = $('bypass') as HTMLButtonElement;
 const deviceNotice = $('device-notice');
+const driverLine = $('driver-line');
+const audioPanel = $('audio-panel');
+const audioError = $('audio-error');
+const audioRunning = $('audio-running');
 const footerStatus = $('footer-status');
 const latencyButton = $('latency');
 const latencyPanel = $('latency-info');
@@ -66,6 +71,18 @@ const dropOverlay = $('drop-overlay');
 // (the desktop app, hidden until shown here).
 for (const e of document.querySelectorAll(DESKTOP ? '[data-web]' : '[data-desktop]')) e.remove();
 for (const e of document.querySelectorAll<HTMLElement>('[data-desktop]')) e.hidden = false;
+
+// ── Panels ─────────────────────────────────────────────────
+// What opens a panel (a menu item, the status cluster) looks pressed while it is open.
+for (const panel of document.querySelectorAll<HTMLElement>('.panel[popover]')) {
+  const openers = document.querySelectorAll(
+    `[popovertarget="${panel.id}"]:not([popovertargetaction="hide"])`,
+  );
+  panel.addEventListener('toggle', (e) => {
+    const open = e.newState === 'open';
+    for (const o of openers) o.classList.toggle('is-open', open);
+  });
+}
 
 // The other platform's engine is not in the build at all.
 let engine: AmpEngine;
@@ -160,7 +177,7 @@ const cabinetButtons = new Segmented('Cabinet', CABINET_NAMES, (i) => {
   setParam(P.Cabinet, i);
 });
 cabinetButtons.select(settings.params[P.Cabinet] ?? 1);
-cabinetButtons.setEnabled(CABINET_CUSTOM, false, 'Load an impulse response first');
+cabinetButtons.setEnabled(CABINET_CUSTOM, false, 'Load an impulse response first (Cabinet menu)');
 $('cabinet').append(cabinetButtons.element);
 
 // ── Knobs ──────────────────────────────────────────────────
@@ -296,6 +313,9 @@ async function refreshDevices(): Promise<void> {
   updateNotice();
 }
 
+/** Whether the chosen input channel is one the running input does not deliver. */
+let channelSilent = false;
+
 function updateNotice(): void {
   const notes: string[] = [];
   if (!engine.canChooseOutput) {
@@ -304,7 +324,8 @@ function updateNotice(): void {
     );
   }
   const channels = engine.inputChannelCount();
-  if (engine.running && settings.inputChannel >= channels) {
+  channelSilent = engine.running && settings.inputChannel >= channels;
+  if (channelSilent) {
     notes.push(
       `This input delivers ${channels === 1 ? 'one channel' : `${String(channels)} channels`} only, so input ${String(settings.inputChannel + 1)} is silent. Choose input 1.`,
     );
@@ -319,6 +340,19 @@ function updateNotice(): void {
   }
   deviceNotice.textContent = notes.join(' ');
   deviceNotice.hidden = notes.length === 0;
+  const setup = engine.running ? runningSetup() : [];
+  audioRunning.textContent = setup.length > 0 ? `Running at ${setup.join(', ')}.` : '';
+  updateDriverLine();
+}
+
+/** Shows why audio could not start, in the audio settings, and opens them. */
+function showAudioError(message: string): void {
+  audioError.textContent = message;
+  audioError.hidden = false;
+  if (!audioPanel.matches(':popover-open')) audioPanel.showPopover();
+}
+function clearAudioError(): void {
+  audioError.hidden = true;
 }
 
 /**
@@ -343,6 +377,9 @@ if (!engine.canChooseOutput) {
 }
 fillChannels();
 
+for (const select of [hostSelect, inputSelect, channelSelect, outputSelect]) {
+  select.addEventListener('change', clearAudioError);
+}
 inputSelect.addEventListener('change', () => {
   settings.inputDeviceId = inputSelect.value;
   fillChannels();
@@ -408,7 +445,9 @@ hostSelect.addEventListener('change', () => {
 });
 
 // ── Start / stop ───────────────────────────────────────────
+let engineState: EngineState = 'stopped';
 engine.onStateChange = (state) => {
+  engineState = state;
   power.classList.toggle('is-online', state === 'running');
   power.classList.toggle('is-starting', state === 'starting');
   statusText.textContent =
@@ -436,12 +475,14 @@ startBtn.addEventListener('click', () => {
     .start(startOptions())
     .then(async () => {
       if (!engine.running) return;
-      const running = engine.describeRunning();
-      say(running ? `Ready: ${running}. Play!` : 'Ready. Play!');
+      clearAudioError();
+      say('Ready. Play!');
       await refreshDevices();
     })
     .catch((err: unknown) => {
-      say(engine.describeError(err), true);
+      const message = engine.describeError(err);
+      say(message, true);
+      showAudioError(message);
     });
 });
 stopBtn.addEventListener('click', () => {
@@ -481,17 +522,7 @@ function updateLatency(): void {
   const e = engine.latencyEstimate();
   const dropoutCount = engine.running ? (dropouts?.count ?? 0) : 0;
   latencyButton.classList.toggle('has-dropouts', dropoutCount > 0);
-  const suffix = dropoutCount > 0 ? ` · ${plural(dropoutCount, 'DROPOUT')}` : '';
-  if (measurement) {
-    latencyButton.textContent = `LATENCY ${String(Math.round(measurement.totalMs))} MS · MEASURED${suffix}`;
-    latencyButton.title = 'Measured over a loopback cable. Click for details.';
-  } else if (e) {
-    latencyButton.textContent = `LATENCY ≈ ${String(Math.round(e.totalMs))} MS${suffix}`;
-    latencyButton.title = `Estimated from what ${engine.estimateSource} reports. Click to measure the real figure.`;
-  } else {
-    latencyButton.textContent = 'LATENCY INFO';
-    latencyButton.title = 'What latency to expect, and how to measure it';
-  }
+  updateDriverLine();
   // The panel's figures only matter while it is open.
   if (!latencyPanel.matches(':popover-open')) return;
   showEstimate(e);
@@ -503,6 +534,52 @@ function updateLatency(): void {
     latMeasured.textContent = '—';
     if (!engine.running) latMeasuredDetail.textContent = 'Engage, then measure.';
   }
+}
+
+// ── Driver line ────────────────────────────────────────────
+// Under the power state and the meters: what audio runs on, at what sample rate and buffer
+// size; while stopped, what Engage will open. Latency figures are in the latency panel only.
+function driverName(): string {
+  if (!DESKTOP) return 'Browser audio';
+  return hostSelect.selectedOptions[0]?.text ?? 'Default driver';
+}
+
+/** Sample rate and buffer size while running, e.g. ["48 kHz", "256 samples"]. */
+function runningSetup(): string[] {
+  const parts: string[] = [];
+  const rate = engine.sampleRate();
+  if (rate) parts.push(`${String(rate / 1000)} kHz`);
+  const b = engine.bufferFrames();
+  const input = b?.input ?? b?.output;
+  const output = b?.output ?? b?.input;
+  if (input != null && output != null) {
+    parts.push(
+      input === output
+        ? `${String(input)} samples`
+        : `${String(input)}/${String(output)} samples in/out`,
+    );
+  }
+  return parts;
+}
+
+function updateDriverLine(): void {
+  const parts = [driverName()];
+  let warning = false;
+  if (engine.running) {
+    parts.push(...runningSetup());
+    const count = dropouts?.count ?? 0;
+    if (count > 0) parts.push(plural(count, 'dropout'));
+    if (channelSilent) parts.push(`input ${String(settings.inputChannel + 1)} silent`);
+    warning = count > 0 || channelSilent;
+  } else if (engineState === 'starting') {
+    parts.push('opening…');
+  } else {
+    const input = inputSelect.selectedOptions[0]?.text;
+    if (input) parts.push(input);
+  }
+  driverLine.textContent = parts.join(' · ');
+  driverLine.classList.toggle('is-idle', engineState === 'stopped');
+  driverLine.classList.toggle('is-warning', warning);
 }
 
 // Polling reads a few properties once a second: no cost to the audio.
@@ -565,7 +642,8 @@ async function loadIr(file: File): Promise<void> {
   }
   irName.textContent = file.name;
   irName.title = file.name;
-  cabinetButtons.setEnabled(CABINET_CUSTOM, true);
+  irName.classList.add('is-loaded');
+  cabinetButtons.setEnabled(CABINET_CUSTOM, true, file.name);
   cabinetButtons.select(CABINET_CUSTOM);
   setParam(P.Cabinet, CABINET_CUSTOM);
   say(`Cabinet IR loaded: ${file.name}`);

@@ -77,9 +77,10 @@ pub struct Info {
     pub output_format: SampleFormat,
     /// Sample rate of both streams.
     pub sample_rate: u32,
-    /// Buffer size the backend reports for the input stream, in frames.
+    /// Buffer size of the input stream: the frames it delivers per cycle (the ASIO buffer
+    /// size, the WASAPI period), as the backend reports it.
     pub input_buffer: Option<u32>,
-    /// Buffer size the backend reports for the output stream, in frames.
+    /// Buffer size of the output stream, like `input_buffer`.
     pub output_buffer: Option<u32>,
     /// The engine's own latency, in samples.
     pub engine_latency: usize,
@@ -377,8 +378,10 @@ impl Duplex {
             input_format: s.input_format,
             output_format: s.output_format,
             sample_rate: s.sample_rate,
+            // Both endpoints run at the one period. The render buffer the driver allocated
+            // (`s.output_buffer`) is only room: the loop keeps far less of it queued.
             input_buffer: Some(s.input_buffer),
-            output_buffer: Some(s.output_buffer),
+            output_buffer: Some(s.input_buffer),
             engine_latency: core.engine_latency,
         };
         Ok(Self {
