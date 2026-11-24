@@ -14,6 +14,9 @@ The Windows installer contains two builds of Klirr and installs one of them:
 
 Klirr's Help > About shows which of the two is installed.
 
+Both builds also contain third-party open-source software, each part under its own license:
+THIRD-PARTY-NOTICES.txt lists it, with the license texts and copyright notices.
+
 Source code
 -----------
 
