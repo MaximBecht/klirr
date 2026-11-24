@@ -13,6 +13,36 @@
   </head>
   <body>
     <main class="amp-shell" id="app">
+      <nav class="menu-bar" aria-label="Menu">
+        <button
+          type="button"
+          class="menu-item"
+          id="menu-audio"
+          popovertarget="audio-panel"
+          aria-haspopup="dialog"
+        >
+          AUDIO
+        </button>
+        <button
+          type="button"
+          class="menu-item"
+          id="menu-cabinet"
+          popovertarget="cabinet-panel"
+          aria-haspopup="dialog"
+        >
+          CABINET
+        </button>
+        <button
+          type="button"
+          class="menu-item"
+          id="latency"
+          popovertarget="latency-info"
+          aria-haspopup="dialog"
+        >
+          LATENCY
+        </button>
+      </nav>
+
       <header class="amp-header">
         <div class="brand">
           <svg class="tube" id="tube" viewBox="0 0 100 120" aria-hidden="true">
@@ -75,44 +105,34 @@
             <span class="brand-sub">The free &amp; open-source guitar amp</span>
           </div>
         </div>
-        <div class="status-cluster">
-          <div class="power-indicator" id="power">
-            <span class="power-dot"></span>
-            <span id="status-text">OFFLINE</span>
-          </div>
-          <div class="meters" id="meters"></div>
-        </div>
-      </header>
-
-      <section class="device-row" aria-label="Audio devices">
-        <div class="device-group device-group--narrow" data-desktop hidden>
-          <label class="device-label" for="host">DRIVER</label>
-          <select class="device-select" id="host"></select>
-        </div>
-        <div class="device-group">
-          <label class="device-label" for="input-device">INPUT</label>
-          <select class="device-select" id="input-device"></select>
-        </div>
-        <div class="device-group device-group--narrow">
-          <label class="device-label" for="input-channel">CHANNEL</label>
-          <select class="device-select" id="input-channel">
-            <option value="0">Input 1 (left)</option>
-            <option value="1">Input 2 (right)</option>
-          </select>
-        </div>
-        <div class="device-group">
-          <label class="device-label" for="output-device">OUTPUT</label>
-          <select class="device-select" id="output-device"></select>
-        </div>
-        <div class="device-group device-group--actions">
+        <div class="transport">
           <button type="button" class="btn btn--start" id="start">▶ ENGAGE</button>
           <button type="button" class="btn btn--stop" id="stop" disabled>■ STOP</button>
           <button type="button" class="btn btn--bypass" id="bypass" aria-pressed="false">
             ⊘ BYPASS
           </button>
         </div>
-        <p class="notice" id="device-notice" hidden></p>
-      </section>
+        <!-- Everything here is about the audio setup, so all of it opens the audio settings. -->
+        <button
+          type="button"
+          class="status-cluster"
+          id="status"
+          popovertarget="audio-panel"
+          aria-haspopup="dialog"
+          aria-label="Audio settings"
+          aria-describedby="status-text driver-line"
+          title="Audio settings"
+        >
+          <span class="status-row">
+            <span class="power-indicator" id="power">
+              <span class="power-dot"></span>
+              <span id="status-text">OFFLINE</span>
+            </span>
+            <span class="meters" id="meters"></span>
+          </span>
+          <span class="driver-line" id="driver-line"></span>
+        </button>
+      </header>
 
       <section class="mode-section" aria-label="Amp channel and cabinet">
         <div class="mode-group">
@@ -122,9 +142,6 @@
         <div class="mode-group">
           <div class="section-label">CABINET</div>
           <div id="cabinet"></div>
-          <button type="button" class="btn btn--ghost" id="load-ir">LOAD IR…</button>
-          <input type="file" id="ir-file" accept=".wav,audio/wav,audio/x-wav,audio/*" hidden />
-          <span class="ir-name" id="ir-name"></span>
         </div>
       </section>
 
@@ -136,29 +153,96 @@
           anywhere</span
         >
         <span class="footer-status" id="footer-status" role="status" aria-live="polite"></span>
-        <button
-          type="button"
-          class="footer-latency"
-          id="latency"
-          popovertarget="latency-info"
-          aria-haspopup="dialog"
-        >
-          LATENCY INFO
-        </button>
       </footer>
 
       <div
-        class="latency-panel"
-        id="latency-info"
+        class="panel panel--narrow"
+        id="audio-panel"
         popover
         role="dialog"
-        aria-labelledby="latency-title"
+        aria-labelledby="audio-title"
       >
-        <div class="latency-panel-head">
+        <div class="panel-head">
+          <h2 id="audio-title">AUDIO</h2>
+          <button
+            type="button"
+            class="panel-close"
+            popovertarget="audio-panel"
+            popovertargetaction="hide"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="device-grid">
+          <div class="device-group device-group--wide" data-desktop hidden>
+            <label class="device-label" for="host">DRIVER</label>
+            <select class="device-select" id="host"></select>
+          </div>
+          <div class="device-group">
+            <label class="device-label" for="input-device">INPUT</label>
+            <select class="device-select" id="input-device"></select>
+          </div>
+          <div class="device-group">
+            <label class="device-label" for="input-channel">CHANNEL</label>
+            <select class="device-select" id="input-channel">
+              <option value="0">Input 1 (left)</option>
+              <option value="1">Input 2 (right)</option>
+            </select>
+          </div>
+          <div class="device-group device-group--wide">
+            <label class="device-label" for="output-device">OUTPUT</label>
+            <select class="device-select" id="output-device"></select>
+          </div>
+        </div>
+        <p class="notice notice--error" id="audio-error" hidden></p>
+        <p class="notice" id="device-notice" hidden></p>
+        <p class="panel-detail" id="audio-running"></p>
+      </div>
+
+      <div
+        class="panel panel--narrow"
+        id="cabinet-panel"
+        popover
+        role="dialog"
+        aria-labelledby="cabinet-title"
+      >
+        <div class="panel-head">
+          <h2 id="cabinet-title">CABINET</h2>
+          <button
+            type="button"
+            class="panel-close"
+            popovertarget="cabinet-panel"
+            popovertargetaction="hide"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <div class="panel-text">
+          <p>
+            Besides the two built-in cabinets, Klirr plays through any cabinet you have an
+            <strong>impulse response</strong> of: a short .wav recording of a speaker and
+            microphone. Load one and choose <strong>Custom IR</strong>.
+          </p>
+        </div>
+        <div class="ir-row">
+          <button type="button" class="btn btn--ghost" id="load-ir">LOAD IR…</button>
+          <input type="file" id="ir-file" accept=".wav,audio/wav,audio/x-wav,audio/*" hidden />
+          <span class="ir-name" id="ir-name">No impulse response loaded</span>
+        </div>
+        <p class="panel-detail">
+          You can also drop a .wav file anywhere on the window. It is read on your computer, never
+          uploaded.
+        </p>
+      </div>
+
+      <div class="panel" id="latency-info" popover role="dialog" aria-labelledby="latency-title">
+        <div class="panel-head">
           <h2 id="latency-title">LATENCY</h2>
           <button
             type="button"
-            class="latency-close"
+            class="panel-close"
             popovertarget="latency-info"
             popovertargetaction="hide"
             aria-label="Close"
@@ -192,7 +276,7 @@
           </div>
         </div>
 
-        <div class="latency-text">
+        <div class="panel-text">
           <p data-web>
             <strong>The estimate</strong> adds up what the browser reports. It updates while you
             play and costs nothing, but it misses what the browser does not know: the interface's
@@ -235,8 +319,8 @@
             </li>
             <li>
               <strong>WASAPI shared</strong> goes through the Windows audio engine and lets other
-              programs play along, but it is slow: about 90 ms measured on a Focusrite Scarlett.
-              Use it to try Klirr out, then switch to exclusive or ASIO.
+              programs play along, but it is slow: about 90 ms measured on a Focusrite Scarlett. Use
+              it to try Klirr out, then switch to exclusive or ASIO.
             </li>
             <li>
               <strong>ASIO</strong>, where available, talks to your interface's own driver. Set the

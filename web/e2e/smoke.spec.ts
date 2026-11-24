@@ -115,7 +115,8 @@ test('engages, processes the microphone and stops', async ({ app: page }) => {
   await engage(page);
   await expect(page.locator('#tube')).toHaveClass(/is-on/);
   await expect(page.locator('#stop')).toBeEnabled();
-  await expect(page.locator('#latency')).toHaveText(/LATENCY ≈ \d+ MS/);
+  // The driver line under the meters shows the sample rate; latency only in the panel.
+  await expect(page.locator('#driver-line')).toHaveText(/^Browser audio · \d+(\.\d+)? kHz$/);
   // The panel shows the browser's breakdown, and measuring is possible while engaged.
   await page.locator('#latency').click();
   await expect(page.locator('#latency-info')).toBeVisible();
@@ -184,7 +185,8 @@ test('a stall the browser catches up on is not counted as a dropout', async ({ a
     // Long enough for the counter to settle on a verdict (two windows of a second each).
     await new Promise((r) => setTimeout(r, 3500));
   });
-  await expect(page.locator('#latency')).toHaveText(/^LATENCY ≈ \d+ MS$/);
+  await expect(page.locator('#driver-line')).not.toHaveText(/dropout/);
+  await expect(page.locator('#driver-line')).not.toHaveClass(/is-warning/);
   await page.locator('#latency').click();
   await expect(page.locator('#lat-dropouts')).toHaveText('No dropouts since Engage.');
 });

@@ -94,7 +94,8 @@ export class AudioEngine implements AmpEngine {
     navigator.mediaDevices.addEventListener('devicechange', onChange);
   }
 
-  describeRunning(): string | null {
+  /** The browser does not say what buffers the device runs with. */
+  bufferFrames(): null {
     return null;
   }
 
@@ -250,6 +251,10 @@ export class AudioEngine implements AmpEngine {
     const outputMs = (ctx.baseLatency + (ctx.outputLatency || 0)) * 1000;
     const engineMs = (this.latencySamples / ctx.sampleRate) * 1000;
     return { inputMs, outputMs, engineMs, totalMs: (inputMs ?? 0) + outputMs + engineMs };
+  }
+
+  sampleRate(): number | null {
+    return this.state === 'running' && this.ctx ? this.ctx.sampleRate : null;
   }
 
   /** Times the audio fell behind for good since audio started, and the latency that added. */

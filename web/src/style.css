@@ -28,6 +28,8 @@
   --font-display: 'Bebas Neue', sans-serif;
   --font-mono: 'Share Tech Mono', ui-monospace, monospace;
   --font-body: 'Barlow', system-ui, sans-serif;
+
+  --menu-h: 30px;
 }
 
 *,
@@ -102,23 +104,56 @@ input {
   border-radius: 6px 6px 0 0;
 }
 
-/* Inset panel line */
+/* Inset panel line, below the menu bar */
 .amp-shell::after {
   content: '';
   position: absolute;
-  inset: 12px;
+  inset: calc(3px + var(--menu-h) + 1px + 12px) 12px 12px;
   border: 1px solid var(--border);
   border-radius: 4px;
   pointer-events: none;
   opacity: 0.35;
 }
 
+/* ── Menu bar ──────────────────────────────────────────── */
+.menu-bar {
+  display: flex;
+  align-items: stretch;
+  height: var(--menu-h);
+  padding: 0 20px;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+}
+.menu-item {
+  background: none;
+  border: none;
+  padding: 0 12px;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.25em;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+.menu-item:hover,
+.menu-item.is-open {
+  color: var(--amber-glow);
+  background: var(--bg3);
+}
+.menu-item.has-dropouts {
+  color: var(--amber);
+}
+.menu-item:focus-visible {
+  outline-offset: -2px;
+}
+
 /* ── Header ────────────────────────────────────────────── */
 .amp-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+  gap: 16px 32px;
   flex-wrap: wrap;
   padding: 18px 32px 14px;
   border-bottom: 1px solid var(--border);
@@ -128,6 +163,13 @@ input {
   display: flex;
   align-items: center;
   gap: 14px;
+  /* Pushes the transport and the status to the right. */
+  margin-right: auto;
+}
+
+.transport {
+  display: flex;
+  gap: 10px;
 }
 
 .tube {
@@ -213,10 +255,53 @@ input {
   margin-top: 2px;
 }
 
+/* The power state, the meters and the driver line: one button that opens the audio settings. */
 .status-cluster {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 7px;
+  /* Room for the hover frame without moving the contents. Stays right when the header wraps. */
+  padding: 6px 10px;
+  margin: -6px -10px -6px auto;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.status-cluster:hover,
+.status-cluster.is-open {
+  border-color: var(--border-hi);
+  background: #ffffff05;
+}
+.status-row {
   display: flex;
   align-items: center;
   gap: 28px;
+}
+.driver-line {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+.driver-line.is-idle {
+  opacity: 0.6;
+}
+.driver-line.is-warning {
+  color: var(--amber);
+}
+.status-cluster:hover .driver-line {
+  color: var(--text);
+}
+.status-cluster:hover .driver-line.is-warning {
+  color: var(--amber-glow);
 }
 
 .power-indicator {
@@ -333,32 +418,23 @@ input {
   box-shadow: 0 0 6px var(--amber-glow);
 }
 
-/* ── Device row ────────────────────────────────────────── */
-.device-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 20px;
-  padding: 16px 32px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg2);
-  flex-wrap: wrap;
+/* ── Audio settings ────────────────────────────────────── */
+.device-grid {
+  display: grid;
+  grid-template-columns: 1fr 160px;
+  gap: 14px 16px;
 }
 .device-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  flex: 1;
-  min-width: 160px;
+  min-width: 0;
 }
-.device-group--narrow {
-  flex: 0 1 150px;
-  min-width: 130px;
+.device-group--wide {
+  grid-column: 1 / -1;
 }
-.device-group--actions {
-  flex-direction: row;
-  align-items: flex-end;
-  gap: 10px;
-  flex: 0 0 auto;
+.device-group[hidden] {
+  display: none;
 }
 .device-label {
   font-family: var(--font-mono);
@@ -396,7 +472,7 @@ input {
 }
 
 .notice {
-  flex-basis: 100%;
+  margin-top: 16px;
   font-family: var(--font-mono);
   font-size: 0.62rem;
   letter-spacing: 0.06em;
@@ -404,6 +480,10 @@ input {
   border-left: 2px solid var(--amber-dim);
   padding: 2px 0 2px 10px;
   line-height: 1.5;
+}
+.notice--error {
+  color: var(--red-glow);
+  border-left-color: var(--red-dim);
 }
 .notice[hidden] {
   display: none;
@@ -468,6 +548,7 @@ input {
 .mode-section {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 16px 40px;
   padding: 14px 32px;
   border-bottom: 1px solid var(--border);
@@ -519,14 +600,23 @@ input {
   opacity: 0.35;
   cursor: not-allowed;
 }
+.ir-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 16px 0 12px;
+}
 .ir-name {
   font-family: var(--font-mono);
-  font-size: 0.62rem;
-  color: var(--amber);
-  max-width: 220px;
+  font-size: 0.68rem;
+  color: var(--text-dim);
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.ir-name.is-loaded {
+  color: var(--amber);
 }
 
 /* ── Knob panel ────────────────────────────────────────── */
@@ -722,28 +812,8 @@ input {
   color: var(--red-glow);
 }
 
-/* ── Latency readout and panel ─────────────────────────── */
-.footer-latency {
-  font: inherit;
-  letter-spacing: inherit;
-  color: var(--text-dim);
-  background: none;
-  border: none;
-  border-bottom: 1px dotted var(--border-hi);
-  padding: 2px 0;
-  cursor: pointer;
-  transition: color 0.15s;
-}
-.footer-latency.has-dropouts {
-  color: var(--amber);
-}
-.footer-latency:hover,
-.footer-latency:focus-visible {
-  color: var(--amber-glow);
-  outline: none;
-}
-
-.latency-panel {
+/* ── Panels (opened from the menu bar) ─────────────────── */
+.panel {
   width: min(640px, calc(100vw - 32px));
   max-height: calc(100vh - 48px);
   overflow-y: auto;
@@ -758,24 +828,27 @@ input {
     0 0 0 1px #000;
   font-family: var(--font-body);
 }
-.latency-panel::backdrop {
+.panel--narrow {
+  width: min(480px, calc(100vw - 32px));
+}
+.panel::backdrop {
   background: #0d0d0fb3;
   backdrop-filter: blur(2px);
 }
-.latency-panel-head {
+.panel-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 16px;
 }
-.latency-panel h2 {
+.panel h2 {
   font-family: var(--font-display);
   font-weight: 400;
   font-size: 1.6rem;
   letter-spacing: 0.14em;
   color: var(--amber-glow);
 }
-.latency-close {
+.panel-close {
   background: none;
   border: none;
   color: var(--text-dim);
@@ -784,8 +857,19 @@ input {
   cursor: pointer;
   padding: 0 4px;
 }
-.latency-close:hover {
+.panel-close:hover {
   color: var(--text-hi);
+}
+.panel-detail {
+  margin-top: 14px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.panel-detail:empty {
+  display: none;
 }
 
 .latency-figures {
@@ -840,18 +924,18 @@ input {
   flex: 1;
 }
 
-.latency-text {
+.panel-text {
   font-size: 0.86rem;
   line-height: 1.55;
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
-.latency-text strong {
+.panel-text strong {
   font-weight: 600;
   color: var(--text-hi);
 }
-.latency-text h3 {
+.panel-text h3 {
   font-family: var(--font-display);
   font-weight: 400;
   font-size: 1.05rem;
@@ -859,13 +943,13 @@ input {
   color: var(--amber);
   margin-top: 4px;
 }
-.latency-text ul {
+.panel-text ul {
   padding-left: 18px;
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
-.latency-text li::marker {
+.panel-text li::marker {
   color: var(--amber-dim);
 }
 
@@ -915,7 +999,6 @@ input {
 /* ── Small screens ─────────────────────────────────────── */
 @media (max-width: 720px) {
   .amp-header,
-  .device-row,
   .mode-section,
   .amp-footer {
     padding-left: 20px;

@@ -75,8 +75,11 @@ export interface AmpEngine {
   /** Must be called from a user gesture (click), so the browser lets audio start. */
   start(opts: StartOptions): Promise<void>;
   stop(): Promise<void>;
-  /** A line describing what runs, once running (driver, rate, buffer), or null. */
-  describeRunning(): string | null;
+  /**
+   * Buffer sizes while running: the frames per cycle of input and output (the ASIO buffer
+   * size, the WASAPI period). Null when not running or not known (the browser).
+   */
+  bufferFrames(): { input: number | null; output: number | null } | null;
 
   /** Queues a parameter change; changes are sent together every few milliseconds. */
   setParam(index: number, value: number): void;
@@ -90,6 +93,8 @@ export interface AmpEngine {
   /** Number of channels the current input delivers. */
   inputChannelCount(): number;
 
+  /** The sample rate audio runs at; null when not running. */
+  sampleRate(): number | null;
   /** Cheap enough to poll; null when not running. */
   latencyEstimate(): LatencyEstimate | null;
   /** Null when not running. */

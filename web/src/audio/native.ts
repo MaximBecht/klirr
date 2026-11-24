@@ -180,14 +180,10 @@ export class NativeEngine implements AmpEngine {
     return this.reconfigure({ inputChannel: channel });
   }
 
-  describeRunning(): string | null {
+  bufferFrames(): { input: number | null; output: number | null } | null {
     const s = this.started;
-    if (!s) return null;
-    const buffer = s.outputBuffer ?? s.inputBuffer;
-    const kHz = `${String(s.sampleRate / 1000)} kHz`;
-    if (buffer === null) return `${s.host}, ${kHz}`;
-    const ms = ((buffer / s.sampleRate) * 1000).toFixed(1);
-    return `${s.host}, ${kHz}, ${String(buffer)}-frame buffer (${ms} ms)`;
+    if (!s || this.state !== 'running') return null;
+    return { input: s.inputBuffer, output: s.outputBuffer };
   }
 
   setParam(index: number, value: number): void {
@@ -201,6 +197,10 @@ export class NativeEngine implements AmpEngine {
       this.pending.clear();
       void invoke('set_params', { changes });
     }, PARAM_FLUSH_MS);
+  }
+
+  sampleRate(): number | null {
+    return this.state === 'running' ? (this.started?.sampleRate ?? null) : null;
   }
 
   inputChannelCount(): number {

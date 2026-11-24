@@ -22,12 +22,12 @@ export class Meter {
   private last = 0;
 
   constructor(label: string, clipTitle: string) {
-    this.element = el('div', 'meter');
+    this.element = el('span', 'meter');
     const name = el('span', 'meter-label');
     name.textContent = label;
-    const track = el('div', 'meter-track');
-    this.bar = el('div', 'meter-bar');
-    this.hold = el('div', 'meter-hold');
+    const track = el('span', 'meter-track');
+    this.bar = el('span', 'meter-bar');
+    this.hold = el('span', 'meter-hold');
     track.append(this.bar, this.hold);
     this.clip = el('span', 'led led--red meter-clip');
     this.clip.title = clipTitle;
