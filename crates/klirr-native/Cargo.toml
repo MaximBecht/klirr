@@ -17,10 +17,12 @@ hound = "3.5"
 [target.'cfg(windows)'.dependencies]
 # WASAPI exclusive mode, through safe bindings (this crate stays free of unsafe code).
 wasapi = "0.27"
+# The ASIO driver's control panel (the one call cpal does not offer).
+klirr-asio = { path = "../klirr-asio", optional = true }
 
 [features]
 # ASIO on Windows. Needs LLVM (libclang) to build; see the README.
-asio = ["cpal/asio"]
+asio = ["cpal/asio", "dep:klirr-asio"]
 
 [lints]
 workspace = true

@@ -4,6 +4,7 @@ members = [
     "crates/klirr-dsp",
     "crates/klirr-wasm",
     "crates/klirr-native",
+    "crates/klirr-asio",
     "desktop/src-tauri",
 ]
 

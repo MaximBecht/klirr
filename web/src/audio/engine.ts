@@ -25,6 +25,11 @@ const outputSelectionSupported =
   typeof AudioContext !== 'undefined' && 'setSinkId' in AudioContext.prototype;
 
 const PARAM_FLUSH_MS = 15;
+/** The test tone: concert A at −20 dBFS, as in the desktop app (`klirr_native::tone`). */
+const TONE_HZ = 440;
+const TONE_LEVEL = 0.1;
+/** Time constant of the tone's fades, in seconds. */
+const TONE_FADE_S = 0.008;
 
 let wasmBytes: Promise<ArrayBuffer> | null = null;
 function loadWasm(): Promise<ArrayBuffer> {
@@ -59,6 +64,9 @@ export class AudioEngine implements AmpEngine {
   private state: EngineState = 'stopped';
   private ctx: AudioContext | null = null;
   private node: AudioWorkletNode | null = null;
+  /** Between the worklet and the output: faded out while the test tone sounds. */
+  private amp: GainNode | null = null;
+  private tone: { osc: OscillatorNode; gain: GainNode } | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private stream: MediaStream | null = null;
   private latencySamples = 0;
@@ -157,7 +165,8 @@ export class AudioEngine implements AmpEngine {
       if (cancelled()) return;
 
       this.connectInput(stream);
-      node.connect(ctx.destination);
+      this.amp = new GainNode(ctx);
+      node.connect(this.amp).connect(ctx.destination);
       if (opts.outputDeviceId) await this.setOutputDevice(opts.outputDeviceId);
       await ctx.resume();
       if (this.ir) void this.sendIr(this.ir);
@@ -178,6 +187,10 @@ export class AudioEngine implements AmpEngine {
     this.pending.clear();
     this.source?.disconnect();
     this.node?.disconnect();
+    this.amp?.disconnect();
+    this.tone?.osc.stop();
+    this.tone?.gain.disconnect();
+    this.amp = this.tone = null;
     if (this.node) this.node.port.onmessage = null;
     this.stream?.getTracks().forEach((t) => {
       t.onended = null;
@@ -204,6 +217,31 @@ export class AudioEngine implements AmpEngine {
       this.post({ type: 'params', changes: [...this.pending] });
       this.pending.clear();
     }, PARAM_FLUSH_MS);
+  }
+
+  setTestTone(on: boolean): void {
+    const ctx = this.ctx;
+    if (!ctx || !this.amp || this.state !== 'running') return;
+    if (on && !this.tone) {
+      const osc = new OscillatorNode(ctx, { frequency: TONE_HZ });
+      const gain = new GainNode(ctx, { gain: 0 });
+      osc.connect(gain).connect(ctx.destination);
+      osc.start();
+      this.tone = { osc, gain };
+    }
+    const tone = this.tone;
+    if (!tone) return;
+    const now = ctx.currentTime;
+    tone.gain.gain.setTargetAtTime(on ? TONE_LEVEL : 0, now, TONE_FADE_S);
+    this.amp.gain.setTargetAtTime(on ? 0 : 1, now, TONE_FADE_S);
+    if (!on) {
+      // Long after the fade: the oscillator stops and lets go of the graph.
+      tone.osc.stop(now + TONE_FADE_S * 10);
+      tone.osc.onended = () => {
+        tone.gain.disconnect();
+      };
+      this.tone = null;
+    }
   }
 
   setInputChannel(channel: number): Promise<void> {

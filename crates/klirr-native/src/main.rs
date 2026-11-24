@@ -3,6 +3,8 @@
 //!
 //! ```text
 //! klirr-native devices [--host NAME]
+//! klirr-native buffers [device options]
+//! klirr-native setup   [--host NAME] [--output PART]
 //! klirr-native measure [device options] [--runs N]
 //! klirr-native play    [device options] [name=value ...] [ir=path.wav]
 //! ```
@@ -29,6 +31,8 @@ use klirr_native::{duplex, wav};
 const USAGE: &str = "\
 usage:
   klirr-native devices [--host NAME]
+  klirr-native buffers [device options]
+  klirr-native setup   [--host NAME] [--output PART]
   klirr-native measure [device options] [--runs N]
   klirr-native play    [device options] [name=value ...] [ir=path.wav]
 
@@ -46,6 +50,7 @@ device options:
   --margin FRAMES   safety margin between input and output (default: 0 for ASIO and
                     wasapi-exclusive, 1 ms otherwise)
 
+setup opens the driver's control panel (ASIO) or the system's audio settings.
 measure needs a cable from an output of the interface to the selected input.";
 
 /// Time for the streams to settle before measuring: the first trims happen in it.
@@ -374,10 +379,48 @@ fn devices(args: &Args) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Opens the hardware setup: the ASIO driver's control panel, or the system's settings.
+fn setup(args: &Args) -> Result<(), Box<dyn Error>> {
+    let o = &args.options;
+    klirr_native::setup::open(o.host.as_deref(), o.output.as_deref(), None)
+}
+
+/// Prints the buffer sizes the devices allow, as the desktop app's buffer menu offers them.
+fn buffers(args: &Args) -> Result<(), Box<dyn Error>> {
+    let o = &args.options;
+    let choice = klirr_native::devices::buffer_choice(
+        o.host.as_deref(),
+        o.input.as_deref(),
+        o.output.as_deref(),
+        o.rate,
+    )?;
+    let ms = |frames: u32| f64::from(frames) / f64::from(choice.sample_rate) * 1000.0;
+    println!("at {} Hz", choice.sample_rate);
+    if choice.rates.is_empty() {
+        println!("  sample rate set by the system or the driver, not by Klirr");
+    } else {
+        let rates: Vec<String> = choice.rates.iter().map(u32::to_string).collect();
+        println!("  sample rates Klirr can ask for: {} Hz", rates.join(", "));
+    }
+    match choice.default {
+        Some(frames) => println!("  default: {frames} frames ({:.2} ms)", ms(frames)),
+        None => println!("  default: the driver's own setting"),
+    }
+    if let Some(who) = choice.set_by {
+        println!("  set by {who}, not by Klirr");
+    }
+    for frames in &choice.sizes {
+        println!("  {frames:>5} frames ({:.2} ms)", ms(*frames));
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let raw: Vec<String> = std::env::args().skip(1).collect();
     let result = parse(&raw).and_then(|args| match args.command.as_str() {
         "devices" => devices(&args),
+        "buffers" => buffers(&args),
+        "setup" => setup(&args),
         "measure" => measure(&args),
         "play" => play(&args),
         other => Err(format!("unknown command {other:?}\n\n{USAGE}").into()),

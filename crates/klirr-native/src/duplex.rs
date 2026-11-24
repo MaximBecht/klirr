@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use klirr_dsp::{CustomIr, Engine, Param};
 
 use crate::probe::{LoopbackProbe, ProbeResult};
+use crate::tone::TestTone;
 
 /// The engine runs in pieces of at most this many frames.
 const CHUNK: usize = 256;
@@ -43,6 +44,8 @@ pub enum Command {
     /// Swap in a custom IR, prepared for the engine's sample rate. The box comes back as
     /// [`Event::Freed`] holding the previous IR, so nothing is freed on the audio thread.
     Ir(Box<CustomIr>),
+    /// Fade the test tone in (true) or out (false); see [`crate::tone`].
+    TestTone(bool),
 }
 
 /// Audio thread → main thread.
@@ -66,6 +69,10 @@ pub struct Stats {
     pub overflows: AtomicU32,
     /// Errors the backend reported (xruns, device changes).
     pub backend_errors: AtomicU32,
+    /// Times the driver asked to be restarted: an ASIO driver does after its buffer size or
+    /// sample rate was changed in its control panel. The streams keep their old setup (or
+    /// stop) until they are opened again. Not counted in [`Stats::backend_errors`].
+    pub reset_requests: AtomicU32,
     /// Smallest slack in the last window, in frames.
     pub slack_frames: AtomicU32,
     /// The current safety margin, in frames.
@@ -113,6 +120,7 @@ pub struct Processor {
     stats: Arc<Stats>,
     probe: LoopbackProbe,
     probing: bool,
+    tone: TestTone,
     scratch_in: Box<[f32]>,
     scratch_out: Box<[f32]>,
     /// Input has arrived at least once; underruns before that are just the start.
@@ -148,6 +156,7 @@ impl Processor {
             stats,
             probe: LoopbackProbe::new(sample_rate),
             probing: false,
+            tone: TestTone::new(sample_rate),
             scratch_in: vec![0.0; CHUNK].into_boxed_slice(),
             scratch_out: vec![0.0; CHUNK].into_boxed_slice(),
             started: false,
@@ -176,6 +185,7 @@ impl Processor {
                     // the IR would be freed here, which is slow but harmless.
                     let _ = self.events.push(Event::Freed(ir));
                 }
+                Command::TestTone(on) => self.tone.set(on),
             }
         }
 
@@ -183,7 +193,9 @@ impl Processor {
         let level = self.input.slots();
         if !self.started {
             if level == 0 {
+                // The tone needs no input: it plays even while none arrives.
                 out.fill(0.0);
+                self.tone.apply(out);
                 return;
             }
             self.started = true;
@@ -193,6 +205,7 @@ impl Processor {
             // late now is played (later) instead of skipped. The ring is a block longer from
             // here on; the margin grows so the trim does not take that back.
             out.fill(0.0);
+            self.tone.apply(out);
             self.stats.underruns.fetch_add(1, Ordering::Relaxed);
             if self.settled {
                 self.margin += n - level + UNDERRUN_HEADROOM;
@@ -234,6 +247,10 @@ impl Processor {
                 o.copy_from_slice(&self.scratch_out[..len]);
             }
             done += len;
+        }
+        // The measurement's clicks are not mixed with anything.
+        if !self.probing {
+            self.tone.apply(out);
         }
 
         self.meter_pos += n;

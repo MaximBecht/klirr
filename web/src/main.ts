@@ -5,7 +5,7 @@ import '@fontsource/barlow/400.css';
 import '@fontsource/barlow/600.css';
 import './style.css';
 
-import type { HostInfo, NativeEngine } from './audio/native';
+import type { BufferChoice, HostInfo, NativeEngine } from './audio/native';
 import type {
   AmpEngine,
   DeviceInfo,
@@ -14,6 +14,7 @@ import type {
   Measurement,
   StartOptions,
 } from './audio/types';
+import { readConfig, recallBuffer, recallHost, writeConfig, type DesktopConfig } from './config';
 import { CABINET_CUSTOM, CABINET_NAMES, CHANNEL_NAMES, P, spec } from './params';
 import { loadSettings, saveSettings } from './settings';
 import * as fmt from './ui/format';
@@ -49,7 +50,6 @@ const deviceNotice = $('device-notice');
 const driverLine = $('driver-line');
 const audioPanel = $('audio-panel');
 const audioError = $('audio-error');
-const audioRunning = $('audio-running');
 const footerStatus = $('footer-status');
 const latencyButton = $('latency');
 const latencyPanel = $('latency-info');
@@ -65,6 +65,22 @@ const irButton = $('load-ir') as HTMLButtonElement;
 const irFile = $('ir-file') as HTMLInputElement;
 const irName = $('ir-name');
 const dropOverlay = $('drop-overlay');
+const bufferSelect = $('buffer') as HTMLSelectElement;
+const bufferDetail = $('buffer-detail');
+const rateSelect = $('sample-rate') as HTMLSelectElement;
+const rateDetail = $('sample-rate-detail');
+const setupButton = $('hardware-setup') as HTMLButtonElement;
+const setupDetail = $('hardware-setup-detail');
+const toneButton = $('test-tone') as HTMLButtonElement;
+const audioLatInput = $('audio-lat-input');
+const audioLatOutput = $('audio-lat-output');
+const audioLatEngine = $('audio-lat-engine');
+const audioLatTotal = $('audio-lat-total');
+const audioLatMeasured = $('audio-lat-measured');
+const audioLatDetail = $('audio-lat-detail');
+const audioLatEngageRow = $('audio-lat-engage-row');
+const audioLatEngage = $('audio-lat-engage') as HTMLButtonElement;
+const configPath = $('config-path');
 
 // ── Platform ───────────────────────────────────────────────
 // Texts and controls for one platform only: `data-web` (the browser) or `data-desktop`
@@ -89,9 +105,12 @@ for (const panel of document.querySelectorAll<HTMLElement>('.panel[popover]')) {
 let engine: AmpEngine;
 /** The desktop app's engine, for its extras (audio hosts); null in the browser. */
 let native: NativeEngine | null = null;
+/** The desktop engine's class, for its static calls; null in the browser. */
+let Native: typeof NativeEngine | null = null;
 let hostList: Promise<HostInfo[]> = Promise.resolve([]);
 if (DESKTOP) {
   const { NativeEngine } = await import('./audio/native');
+  Native = NativeEngine;
   native = new NativeEngine();
   engine = native;
   hostList = NativeEngine.hosts();
@@ -108,16 +127,79 @@ const storage = (() => {
     return undefined;
   }
 })();
-const settings = loadSettings(storage);
+let settings = loadSettings(storage);
+
+/**
+ * The desktop app's settings file, once read: the desktop app keeps its settings there, not
+ * in localStorage. Null in the browser, or if the file could not be read (then the desktop
+ * app falls back to localStorage).
+ */
+let config: DesktopConfig | null = null;
+/** Id of the platform's default audio host, which the settings file keys its entry by. */
+let defaultHost = '';
+/** Shown once the status line exists. */
+let startupMessage: { text: string; isError: boolean } | null = null;
+if (Native) {
+  defaultHost = (await hostList.catch(() => [])).find((h) => h.isDefault)?.id ?? '';
+  try {
+    const loaded = await Native.loadConfig();
+    configPath.textContent = loaded.path;
+    if (loaded.status === 'new') {
+      // First run: take over what the webview remembered, if anything.
+      config = writeConfig(loaded.config, settings, defaultHost);
+      void Native.saveConfig(config).catch(() => undefined);
+    } else {
+      config = loaded.config;
+      settings = readConfig(config, defaultHost);
+    }
+    if (loaded.status === 'broken') {
+      startupMessage = {
+        text: `The settings file could not be read, so Klirr starts with its defaults. The old file is kept as ${loaded.brokenPath ?? 'a copy'}.`,
+        isError: true,
+      };
+    } else if (loaded.status === 'newer') {
+      startupMessage = {
+        text: 'These settings come from a newer Klirr. Klirr keeps a copy of them before it saves its own.',
+        isError: false,
+      };
+    }
+  } catch (err) {
+    configPath.textContent = 'not available';
+    startupMessage = {
+      text: `Could not read the settings file (${err instanceof Error ? err.message : String(err)}). Settings are kept in the window's storage instead.`,
+      isError: true,
+    };
+  }
+}
+
 // The custom IR itself is not stored, so a stored "custom" cabinet cannot be restored.
 if (settings.params[P.Cabinet] === CABINET_CUSTOM)
   settings.params[P.Cabinet] = spec(P.Cabinet).default;
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+let saveFailed = false;
+/** Writes the current settings into the settings file's copy (desktop). */
+function updateConfig(): void {
+  if (config) config = writeConfig(config, settings, defaultHost);
+}
 function persist(): void {
+  updateConfig();
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    saveSettings(storage, settings);
+    if (!config || !Native) {
+      saveSettings(storage, settings);
+      return;
+    }
+    Native.saveConfig(config).then(
+      () => {
+        saveFailed = false;
+      },
+      (err: unknown) => {
+        // Once, not on every knob turn.
+        if (!saveFailed) say(err instanceof Error ? err.message : String(err), true);
+        saveFailed = true;
+      },
+    );
   }, 300);
 }
 
@@ -139,6 +221,7 @@ function say(message: string, isError = false): void {
     isError ? 10000 : 4000,
   );
 }
+if (startupMessage) say(startupMessage.text, startupMessage.isError);
 
 // ── Meters ─────────────────────────────────────────────────
 const inMeter = new Meter('IN', 'Input clipping: turn the trim or your interface gain down');
@@ -312,6 +395,7 @@ async function refreshDevices(): Promise<void> {
   }
   fillChannels();
   updateNotice();
+  void refreshBuffers();
 }
 
 /** Whether the chosen input channel is one the running input does not deliver. */
@@ -341,9 +425,8 @@ function updateNotice(): void {
   }
   deviceNotice.textContent = notes.join(' ');
   deviceNotice.hidden = notes.length === 0;
-  const setup = engine.running ? runningSetup() : [];
-  audioRunning.textContent = setup.length > 0 ? `Running at ${setup.join(', ')}.` : '';
   updateDriverLine();
+  if (!native) describeWebRate();
 }
 
 /** Shows why audio could not start, in the audio settings, and opens them. */
@@ -369,7 +452,17 @@ function startOptions(): StartOptions {
     options.inputDeviceId = inputSelect.value;
     options.outputDeviceId = outputSelect.value;
   }
+  options.rate = requestedRate();
   return options;
+}
+
+/**
+ * The sample rate to ask for: the chosen one, where the driver lets Klirr choose it (asking
+ * an ASIO driver would change the interface's rate for every program).
+ */
+function requestedRate(): number | null {
+  if (!native || settings.rate === null) return null;
+  return bufferChoice && bufferChoice.rates.length === 0 ? null : settings.rate;
 }
 
 if (!engine.canChooseOutput) {
@@ -408,9 +501,19 @@ channelSelect.addEventListener('change', () => {
 });
 outputSelect.addEventListener('change', () => {
   settings.outputDeviceId = outputSelect.value;
+  // The buffer belongs to the output: bring back the one chosen for it.
+  if (config) recallBuffer(config, settings, defaultHost);
   persist();
   forgetMeasurement();
-  engine.setOutputDevice(outputSelect.value).catch((err: unknown) => {
+  void refreshBuffers();
+  const switched = native
+    ? native.reconfigure({
+        outputDeviceId: outputSelect.value,
+        buffer: settings.buffer,
+        rate: settings.rate,
+      })
+    : engine.setOutputDevice(outputSelect.value);
+  switched.then(reportBuffer).catch((err: unknown) => {
     say(`Could not switch output: ${engine.describeError(err)}`, true);
   });
 });
@@ -419,30 +522,278 @@ engine.watchDevices(() => {
 });
 
 // The audio host (driver API): desktop only.
+/** The hosts as listed, for what their Hardware Setup opens. */
+let hosts: HostInfo[] = [];
 async function fillHosts(): Promise<void> {
   try {
-    const hosts = await hostList;
+    hosts = await hostList;
     hostSelect.replaceChildren(...hosts.map((h) => new Option(h.name, h.isDefault ? '' : h.id)));
   } catch (err) {
     say(`Could not list audio drivers: ${engine.describeError(err)}`, true);
   }
   hostSelect.value = settings.host;
-  if (hostSelect.value !== settings.host) hostSelect.value = '';
+  if (hostSelect.value !== settings.host) {
+    // The remembered driver is not there (another build or machine): use the default, with
+    // what was chosen on it.
+    hostSelect.value = '';
+    settings.host = '';
+    if (config) recallHost(config, settings, defaultHost);
+  }
+  describeSetup();
 }
 hostSelect.addEventListener('change', () => {
+  // Each driver keeps its own devices and buffer: the old one's are in the file already.
+  updateConfig();
   settings.host = hostSelect.value;
+  if (config) recallHost(config, settings, defaultHost);
   persist();
   forgetMeasurement();
+  describeSetup();
   void refreshDevices().then(() => {
     if (!native) return;
-    const { host, inputDeviceId, outputDeviceId, inputChannel } = startOptions();
+    const { host, inputDeviceId, outputDeviceId, inputChannel, buffer, rate } = startOptions();
     native
-      .reconfigure({ host, inputDeviceId, outputDeviceId, inputChannel })
-      .then(updateNotice)
+      .reconfigure({ host, inputDeviceId, outputDeviceId, inputChannel, buffer, rate })
+      .then(() => {
+        updateNotice();
+        reportBuffer();
+      })
       .catch((err: unknown) => {
         say(engine.describeError(err), true);
       });
   });
+});
+
+// ── Hardware setup (desktop only) ──────────────────────────
+// Opens where the settings for every program live (the ASIO driver's control panel, the
+// system's sound settings). Klirr itself only asks for what applies to it while it runs.
+function setupTarget(): string | null {
+  const host = hosts.find((h) => (hostSelect.value ? h.id === hostSelect.value : h.isDefault));
+  return host?.hardwareSetup ?? null;
+}
+
+function describeSetup(): void {
+  const target = setupTarget();
+  setupButton.disabled = target === null;
+  setupDetail.textContent = target
+    ? `Opens ${target}, where the settings for every program live: Klirr leaves them as they are.`
+    : 'This driver has no settings window to open.';
+}
+
+setupButton.addEventListener('click', () => {
+  if (!Native) return;
+  setupButton.disabled = true;
+  Native.hardwareSetup(hostSelect.value, outputSelect.value)
+    .then(() => refreshBuffers())
+    .catch((err: unknown) => {
+      say(engine.describeError(err), true);
+    })
+    .finally(() => {
+      setupButton.disabled = setupTarget() === null;
+    });
+});
+
+// ── Sample rate and buffer (desktop only) ──────────────────
+/** What the current driver and devices allow, as last asked; null if unknown. */
+let bufferChoice: BufferChoice | null = null;
+/** Counts the questions, so only the latest answer shows. */
+let bufferQuery = 0;
+
+const frameMs = (frames: number, rate: number) => `${((frames / rate) * 1000).toFixed(1)} ms`;
+const framesText = (frames: number, rate: number) =>
+  `${String(frames)} frames · ${frameMs(frames, rate)}`;
+
+/** Asks the driver what it allows on the devices the menus show, and fills the menu. */
+async function refreshBuffers(): Promise<void> {
+  if (!Native) return;
+  const query = ++bufferQuery;
+  let choice: BufferChoice | null;
+  let error = '';
+  try {
+    choice = await Native.bufferChoice(
+      hostSelect.value,
+      inputSelect.value,
+      outputSelect.value,
+      settings.rate,
+    );
+  } catch (err) {
+    choice = null;
+    error = engine.describeError(err);
+  }
+  if (query !== bufferQuery) return;
+  bufferChoice = choice;
+  fillRates();
+  fillBuffers(error);
+}
+
+const kHz = (rate: number) => `${String(rate / 1000)} kHz`;
+
+/** The sample rate menu: choosable where the rate is Klirr's alone (WASAPI exclusive). */
+function fillRates(): void {
+  const c = bufferChoice;
+  const running = native?.runningBuffer() ?? null;
+  if (!c || c.rates.length === 0) {
+    const rate = running?.sampleRate ?? c?.sampleRate;
+    rateSelect.replaceChildren(new Option(rate ? kHz(rate) : 'Not available', ''));
+    rateSelect.disabled = true;
+    const who = c?.setBy === 'the Windows audio engine' ? 'Windows' : 'the driver';
+    rateDetail.textContent = c
+      ? `Set by ${who} for every program${setupTarget() ? ', in Hardware Setup' : ''}. Klirr runs at whatever it is set to.`
+      : '';
+    return;
+  }
+  const chosen = settings.rate !== null && c.rates.includes(settings.rate) ? settings.rate : null;
+  rateSelect.replaceChildren(
+    new Option('Device default', ''),
+    ...c.rates.map((r) => new Option(kHz(r), String(r))),
+  );
+  rateSelect.disabled = false;
+  rateSelect.value = chosen === null ? '' : String(chosen);
+  const now = running ? `Running at ${kHz(running.sampleRate)}. ` : '';
+  rateDetail.textContent = `${now}The device runs at this rate while Klirr holds it, and goes back to its own when Klirr lets go.`;
+}
+
+rateSelect.addEventListener('change', () => {
+  settings.rate = rateSelect.value === '' ? null : Number(rateSelect.value);
+  persist();
+  forgetMeasurement();
+  // The buffer sizes are counted at the rate.
+  void refreshBuffers();
+  if (!native) return;
+  native
+    .reconfigure({ rate: settings.rate })
+    .then(() => {
+      reportBuffer();
+      fillRates();
+    })
+    .catch((err: unknown) => {
+      say(engine.describeError(err), true);
+    });
+});
+
+/** The browser's rate: the system's, shown only. */
+function describeWebRate(): void {
+  const rate = engine.sampleRate();
+  rateSelect.replaceChildren(new Option(rate ? kHz(rate) : 'Set by the system', ''));
+  rateDetail.textContent = rate
+    ? 'The browser runs at the rate the system sets for the output device.'
+    : 'Engage to see the rate the system runs the output at.';
+}
+
+function fillBuffers(error = ''): void {
+  const c = bufferChoice;
+  if (!c) {
+    bufferSelect.replaceChildren(new Option('Not available', ''));
+    bufferSelect.disabled = true;
+    describeBuffer(error ? `The driver did not say which sizes it allows: ${error}` : '');
+    return;
+  }
+  if (c.sizes.length === 0) {
+    const running = native?.runningBuffer()?.frames ?? null;
+    const frames = running ?? c.default;
+    const label =
+      frames === null ? `Set by ${c.setBy ?? 'the driver'}` : framesText(frames, c.sampleRate);
+    bufferSelect.replaceChildren(new Option(label, ''));
+    bufferSelect.disabled = true;
+    describeBuffer();
+    return;
+  }
+  // The default is the first entry already (and a stored size equal to it shows as it).
+  const sizes = c.sizes.filter((n) => n !== c.default);
+  const chosen = settings.buffer === c.default ? null : settings.buffer;
+  // A size chosen before (on another rate, or a driver update since) stays selectable.
+  if (chosen !== null && !sizes.includes(chosen)) {
+    sizes.push(chosen);
+    sizes.sort((a, b) => a - b);
+  }
+  const auto =
+    c.default === null
+      ? 'Driver default (its own setting)'
+      : `Default · ${framesText(c.default, c.sampleRate)}`;
+  bufferSelect.replaceChildren(
+    new Option(auto, ''),
+    ...sizes.map((n) => new Option(framesText(n, c.sampleRate), String(n))),
+  );
+  bufferSelect.disabled = false;
+  bufferSelect.value = chosen === null ? '' : String(chosen);
+  describeBuffer();
+}
+
+/** The line under the menu: who sets the size, and what runs. */
+function describeBuffer(extra = ''): void {
+  const lines: string[] = [];
+  const c = bufferChoice;
+  if (c && c.sizes.length === 0) {
+    const where = setupTarget() ? ' Change it in Hardware Setup.' : '';
+    lines.push(
+      `On this driver ${c.setBy ?? 'the driver'} sets the buffer, for every program, so Klirr leaves it alone.${where}`,
+    );
+  } else if (c) {
+    // ASIO drivers run one size for everyone; some keep the last size a program asked for.
+    const asio = hostSelect.value.toLowerCase() === 'asio';
+    lines.push(
+      asio
+        ? 'Klirr asks the driver for this size when it opens it. Most drivers go back to their own size when Klirr closes; some keep the last size a program asked for. If you hear dropouts, go one size up.'
+        : 'Klirr asks for this size when it opens the devices; it applies to Klirr only. If you hear dropouts, go one size up.',
+    );
+  }
+
+  const running = native?.runningBuffer() ?? null;
+  if (running?.frames != null) {
+    const now = `Running at ${framesText(running.frames, running.sampleRate)}.`;
+    if (running.refused !== null && (running.requested !== null || running.requestedRate !== null))
+      lines.push(
+        `${now} The driver would not run as asked, so Klirr opened it with its own setup.`,
+      );
+    else if (running.requested !== null && running.requested !== running.frames)
+      lines.push(`${now} The driver rounded the ${String(running.requested)} frames asked for.`);
+    else lines.push(now);
+  } else if (!engine.running) {
+    lines.push('Takes effect when you engage.');
+  }
+  if (extra) lines.push(extra);
+  bufferDetail.textContent = lines.join(' ');
+}
+
+/** After a (re)start: says so if the driver refused the size asked for. */
+function reportBuffer(): void {
+  describeBuffer();
+  const running = native?.runningBuffer();
+  if (running?.refused) {
+    say(`The driver would not run as asked, so Klirr uses its own setup. ${running.refused}`, true);
+  }
+}
+
+bufferSelect.addEventListener('change', () => {
+  settings.buffer = bufferSelect.value === '' ? null : Number(bufferSelect.value);
+  persist();
+  forgetMeasurement();
+  describeBuffer();
+  if (!native) return;
+  const wasRunning = engine.running;
+  native
+    .reconfigure({ buffer: settings.buffer })
+    .then(() => {
+      reportBuffer();
+      const running = runningSetup().join(', ');
+      if (wasRunning && running) say(`Restarted at ${running}`);
+    })
+    .catch((err: unknown) => {
+      say(engine.describeError(err), true);
+    });
+});
+audioPanel.addEventListener('toggle', () => {
+  if (audioPanel.matches(':popover-open')) {
+    if (native) {
+      describeBuffer();
+      fillRates();
+    } else {
+      describeWebRate();
+    }
+    updateLatency();
+  } else {
+    setTestTone(false);
+  }
 });
 
 // ── Start / stop ───────────────────────────────────────────
@@ -464,20 +815,50 @@ engine.onStateChange = (state) => {
   if (state !== 'running') measurement = null;
   dropouts = engine.dropouts();
   latMeasureBtn.disabled = state !== 'running' || measuring;
+  toneOn = false;
+  renderTone();
   updateLatency();
+  if (native) {
+    describeBuffer();
+    fillRates();
+  } else {
+    describeWebRate();
+  }
 };
+if (native) {
+  native.onRestarted = () => {
+    measurement = null;
+    reportBuffer();
+    fillRates();
+    void refreshBuffers();
+    updateNotice();
+    updateLatency();
+    const running = runningSetup().join(', ');
+    say(
+      running
+        ? `The driver asked for a restart: now running at ${running}.`
+        : 'The driver asked for a restart.',
+    );
+  };
+}
 engine.onDeviceLost = (message) => {
   say(message, true);
 };
 
-startBtn.addEventListener('click', () => {
+/**
+ * Starts the audio. Call it from a click: the browser only lets audio start in one (the
+ * context is created before the first await). Resolves once audio runs, or once it failed
+ * (the error is shown in the audio settings).
+ */
+function engage(): Promise<void> {
   say('Starting…');
-  engine
+  return engine
     .start(startOptions())
     .then(async () => {
       if (!engine.running) return;
       clearAudioError();
       say('Ready. Play!');
+      reportBuffer();
       await refreshDevices();
     })
     .catch((err: unknown) => {
@@ -485,6 +866,9 @@ startBtn.addEventListener('click', () => {
       say(message, true);
       showAudioError(message);
     });
+}
+startBtn.addEventListener('click', () => {
+  void engage();
 });
 stopBtn.addEventListener('click', () => {
   void engine.stop().then(() => {
@@ -492,6 +876,33 @@ stopBtn.addEventListener('click', () => {
     updateNotice();
   });
 });
+
+// ── Test tone ──────────────────────────────────────────────
+let toneOn = false;
+function renderTone(): void {
+  const starting = engineState === 'starting';
+  toneButton.disabled = starting;
+  toneButton.textContent = starting ? '…' : toneOn ? 'ON' : 'OFF';
+  toneButton.setAttribute('aria-pressed', String(toneOn));
+  toneButton.title = engineState === 'stopped' ? 'Starts the audio, then the tone' : '';
+}
+function setTestTone(on: boolean): void {
+  if (on === toneOn) return;
+  toneOn = on && engine.running;
+  engine.setTestTone(toneOn);
+  renderTone();
+}
+toneButton.addEventListener('click', () => {
+  if (engineState !== 'stopped') {
+    setTestTone(!toneOn);
+    return;
+  }
+  // Audio is off: start it, then the tone. Audio keeps running when the tone stops.
+  void engage().then(() => {
+    if (engine.running && audioPanel.matches(':popover-open')) setTestTone(true);
+  });
+});
+renderTone();
 
 // ── Latency ────────────────────────────────────────────────
 /** The last loopback measurement; void once the devices change or audio stops. */
@@ -501,6 +912,8 @@ let measuring = false;
 let dropouts: { count: number; addedMs: number } | null = null;
 /** The dropout count when the last measurement was taken. */
 let dropoutsAtMeasurement = 0;
+/** The estimate when the last measurement was taken, to tell what it misses. */
+let estimateAtMeasurement: LatencyEstimate | null = null;
 
 const ms = (v: number) => `${v.toFixed(1)} ms`;
 
@@ -510,6 +923,40 @@ function showEstimate(e: LatencyEstimate | null): void {
   latEngine.textContent = e ? ms(e.engineMs) : '—';
   latTotal.textContent = e ? `≈ ${ms(e.totalMs)}` : '—';
 }
+
+/** The latency rows of the audio settings: the same figures, and the measurement. */
+function showAudioLatency(e: LatencyEstimate | null): void {
+  audioLatInput.textContent = !e ? '—' : e.inputMs === null ? 'not reported' : ms(e.inputMs);
+  audioLatOutput.textContent = e ? ms(e.outputMs) : '—';
+  audioLatEngine.textContent = e ? ms(e.engineMs) : '—';
+  audioLatTotal.textContent = e ? `≈ ${ms(e.totalMs)}` : '—';
+  audioLatMeasured.textContent = measurement ? ms(measurement.totalMs) : '—';
+  audioLatDetail.textContent = engine.running
+    ? `As ${engine.estimateSource} reports it; the measurement takes a loopback cable.`
+    : 'The figures appear once audio runs.';
+  // While audio is off, the reason the rows are empty comes with the way to fill them.
+  audioLatEngageRow.hidden = engineState === 'running';
+  audioLatEngage.disabled = engineState !== 'stopped';
+  audioLatEngage.textContent = engineState === 'starting' ? 'WARMING UP…' : '▶ ENGAGE';
+}
+// The same as the Engage button in the header (errors show in this panel too).
+audioLatEngage.addEventListener('click', () => {
+  startBtn.click();
+});
+
+/**
+ * What the estimate missed, by the measurement: the part of the latency the driver does not
+ * report (converters, its own safety buffers). Empty when it cannot tell.
+ */
+function describeUnreported(): string {
+  const e = estimateAtMeasurement;
+  if (!measurement || !e || e.inputMs === null) return '';
+  const missing = measurement.totalMs - e.totalMs;
+  if (missing < 0.5)
+    return ` ${sentenceCase(engine.estimateSource)} reports all of it (within 0.5 ms).`;
+  return ` ${sentenceCase(engine.estimateSource)} reports ${ms(e.totalMs)} of it; ${ms(missing)} is not reported (converters and buffers it does not count).`;
+}
+const sentenceCase = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 const plural = (n: number, word: string) => `${String(n)} ${word}${n === 1 ? '' : 's'}`;
 
@@ -524,13 +971,14 @@ function updateLatency(): void {
   const dropoutCount = engine.running ? (dropouts?.count ?? 0) : 0;
   latencyButton.classList.toggle('has-dropouts', dropoutCount > 0);
   updateDriverLine();
-  // The panel's figures only matter while it is open.
+  // The panels' figures only matter while they are open.
+  if (audioPanel.matches(':popover-open')) showAudioLatency(e);
   if (!latencyPanel.matches(':popover-open')) return;
   showEstimate(e);
   latDropouts.textContent = describeDropouts();
   if (measurement) {
     latMeasured.textContent = ms(measurement.totalMs);
-    latMeasuredDetail.textContent = `Round trip ${ms(measurement.roundTripMs)} + engine, ${String(measurement.hits)} clicks agreed, ${plural(dropoutsAtMeasurement, 'dropout')} before it.`;
+    latMeasuredDetail.textContent = `Round trip ${ms(measurement.roundTripMs)} + engine, ${String(measurement.hits)} clicks agreed, ${plural(dropoutsAtMeasurement, 'dropout')} before it.${describeUnreported()}`;
   } else if (!measuring) {
     latMeasured.textContent = '—';
     if (!engine.running) latMeasuredDetail.textContent = 'Engage, then measure.';
@@ -609,6 +1057,9 @@ const MEASURE_ERRORS: Record<Exclude<Measurement, { ok: true }>['reason'], strin
 };
 
 latMeasureBtn.addEventListener('click', () => {
+  // The clicks replace the amp; the tone would cover them.
+  setTestTone(false);
+  estimateAtMeasurement = engine.latencyEstimate();
   measuring = true;
   latMeasureBtn.disabled = true;
   latMeasured.textContent = '…';

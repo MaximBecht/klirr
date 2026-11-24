@@ -32,6 +32,13 @@ export interface StartOptions {
   inputDeviceId: string;
   outputDeviceId: string;
   inputChannel: number;
+  /** Buffer size to ask the driver for, in frames (desktop only); null for its own. */
+  buffer: number | null;
+  /**
+   * Sample rate to ask for, in Hz (desktop only, where the rate is Klirr's to choose); null
+   * for the device's own.
+   */
+  rate: number | null;
   params: number[];
 }
 
@@ -101,6 +108,11 @@ export interface AmpEngine {
   dropouts(): Dropouts | null;
   /** Loopback measurement: one to three seconds. */
   measureLatency(): Promise<Measurement>;
+  /**
+   * Fades a quiet 440 Hz test tone in, in place of the amp, or out again. Only while
+   * running; it is off after every start.
+   */
+  setTestTone(on: boolean): void;
 
   /**
    * Decodes an impulse response (any format the webview decodes, normally WAV) and loads it.

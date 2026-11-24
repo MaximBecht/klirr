@@ -2,6 +2,7 @@
 // over Tauri's IPC. The webview only shows the UI; audio never passes through it.
 
 import { Channel, invoke } from '@tauri-apps/api/core';
+import type { DesktopConfig, LoadedConfig } from '../config';
 import { decodeIr } from './ir';
 import type {
   AmpEngine,
@@ -19,6 +20,41 @@ export interface HostInfo {
   id: string;
   name: string;
   isDefault: boolean;
+  /**
+   * What the Hardware Setup button opens ("the ASIO driver's control panel"); null where
+   * there is nothing to open.
+   */
+  hardwareSetup: string | null;
+}
+
+/**
+ * The buffer sizes and sample rates a host's devices allow (see
+ * `klirr_native::devices::BufferChoice`).
+ */
+export interface BufferChoice {
+  /** The rate the devices open at; the sizes count frames at this rate. */
+  sampleRate: number;
+  /** Rates Klirr can ask for, lowest first; empty when the rate is not Klirr's to choose. */
+  rates: number[];
+  /** The size without a request, in frames, where known. */
+  default: number | null;
+  /** Sizes Klirr can ask for, smallest first; empty when the size is not Klirr's to choose. */
+  sizes: number[];
+  /** Who sets the size when Klirr cannot ("the Windows audio engine"). */
+  setBy: string | null;
+}
+
+/** The buffer audio runs with. */
+export interface RunningBuffer {
+  /** Frames, as the driver reports them (null where it does not). */
+  frames: number | null;
+  sampleRate: number;
+  /** What was asked for; null for the driver's own. */
+  requested: number | null;
+  /** Why the requested size or rate was not used (the driver's own was), if it was not. */
+  refused: string | null;
+  /** The sample rate asked for; null for the device's own. */
+  requestedRate: number | null;
 }
 
 interface NativeDevice {
@@ -36,6 +72,9 @@ interface Started {
   inputChannels: number;
   inputBuffer: number | null;
   outputBuffer: number | null;
+  requestedBuffer: number | null;
+  bufferRefused: string | null;
+  requestedRate: number | null;
   engineLatency: number;
 }
 
@@ -49,7 +88,11 @@ interface Status {
 
 /** Native side → webview, while audio runs. */
 type NativeEvent =
-  ({ type: 'meters' } & Meters) | ({ type: 'status' } & Status) | { type: 'device-error' };
+  | ({ type: 'meters' } & Meters)
+  | ({ type: 'status' } & Status)
+  | { type: 'device-error' }
+  | { type: 'restarted'; started: Started }
+  | { type: 'restart-failed'; message: string };
 
 const PARAM_FLUSH_MS = 15;
 
@@ -62,6 +105,11 @@ export class NativeEngine implements AmpEngine {
   onMeters: (m: Meters) => void = () => undefined;
   onStateChange: (s: EngineState) => void = () => undefined;
   onDeviceLost: (message: string) => void = () => undefined;
+  /**
+   * The driver asked for a restart (its buffer size or sample rate was changed in its own
+   * settings) and audio runs again, perhaps with another buffer or rate.
+   */
+  onRestarted: () => void = () => undefined;
 
   readonly canChooseOutput = true;
   readonly labelsNeedPermission = false;
@@ -84,6 +132,45 @@ export class NativeEngine implements AmpEngine {
   /** The audio hosts (driver APIs) the native side can open, the default first. */
   static hosts(): Promise<HostInfo[]> {
     return invoke<HostInfo[]>('hosts');
+  }
+
+  /**
+   * The buffer sizes and sample rates `host` allows on these devices ('' for the defaults),
+   * the sizes counted at `rate` where Klirr chooses the rate.
+   */
+  static bufferChoice(
+    host: string,
+    input: string,
+    output: string,
+    rate: number | null,
+  ): Promise<BufferChoice> {
+    return invoke<BufferChoice>('buffer_sizes', { host, input, output, rate });
+  }
+
+  /**
+   * Opens the hardware setup of `host` for `output` ('' for the defaults): the ASIO driver's
+   * control panel, or the system's audio settings. With some ASIO drivers it resolves only
+   * once the panel is closed.
+   */
+  static async hardwareSetup(host: string, output: string): Promise<void> {
+    try {
+      await invoke('hardware_setup', { host, output });
+    } catch (err) {
+      throw new Error(sentence(String(err)), { cause: err });
+    }
+  }
+
+  /** The settings file, as the app found it at start (with what was saved since). */
+  static loadConfig(): Promise<LoadedConfig> {
+    return invoke<LoadedConfig>('load_config');
+  }
+
+  static async saveConfig(config: DesktopConfig): Promise<void> {
+    try {
+      await invoke('save_config', { config });
+    } catch (err) {
+      throw new Error(sentence(String(err)), { cause: err });
+    }
   }
 
   async listDevices(host: string): Promise<Devices> {
@@ -144,6 +231,8 @@ export class NativeEngine implements AmpEngine {
           input: opts.inputDeviceId,
           output: opts.outputDeviceId,
           channel: opts.inputChannel,
+          buffer: opts.buffer,
+          rate: opts.rate,
           params: opts.params,
         },
         events,
@@ -159,13 +248,26 @@ export class NativeEngine implements AmpEngine {
   }
 
   /**
-   * Changes the host, devices or channel; restarts the audio if it runs. Takes them together
+   * Changes the host, devices, channel or buffer; restarts the audio if it runs. Takes them together
    * (a new host comes with new devices), so the audio restarts once.
    */
   async reconfigure(change: Partial<Omit<StartOptions, 'params'>>): Promise<void> {
     if (!this.opts) return;
     this.opts = { ...this.opts, ...change };
     if (this.state !== 'stopped') await this.open();
+  }
+
+  /** The buffer audio runs with; null while it does not run. */
+  runningBuffer(): RunningBuffer | null {
+    const s = this.started;
+    if (!s) return null;
+    return {
+      frames: s.outputBuffer ?? s.inputBuffer,
+      sampleRate: s.sampleRate,
+      requested: s.requestedBuffer,
+      refused: s.bufferRefused,
+      requestedRate: s.requestedRate,
+    };
   }
 
   setInputDevice(deviceId: string, channel: number): Promise<void> {
@@ -223,6 +325,11 @@ export class NativeEngine implements AmpEngine {
     return { count: this.status?.dropouts ?? 0, addedMs: this.status?.addedMs ?? 0 };
   }
 
+  setTestTone(on: boolean): void {
+    if (this.state !== 'running') return;
+    void invoke('test_tone', { on });
+  }
+
   measureLatency(): Promise<Measurement> {
     if (this.state !== 'running') return Promise.resolve({ ok: false, reason: 'stopped' });
     return invoke<Measurement>('measure');
@@ -256,6 +363,19 @@ export class NativeEngine implements AmpEngine {
       case 'device-error':
         this.onDeviceLost(
           'The audio device reported an error (unplugged?). Choose a device and engage again.',
+        );
+        break;
+      case 'restarted':
+        this.started = e.started;
+        this.status = null;
+        this.onRestarted();
+        break;
+      case 'restart-failed':
+        this.generation++;
+        this.started = this.status = null;
+        this.setState('stopped');
+        this.onDeviceLost(
+          `The driver asked for a restart, and the devices would not open again: ${e.message}`,
         );
         break;
     }
