@@ -1,6 +1,6 @@
 {
   "name": "klirr-desktop",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.1",
   "description": "Klirr desktop app (Tauri): the web UI on the native audio host",
   "license": "MIT",
   "private": true,

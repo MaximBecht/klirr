@@ -2095,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "klirr-asio"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "asio-sys",
  "windows-sys 0.61.2",
@@ -2103,7 +2103,7 @@ dependencies = [
 
 [[package]]
 name = "klirr-desktop"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "klirr-dsp",
  "klirr-native",
@@ -2117,7 +2117,7 @@ dependencies = [
 
 [[package]]
 name = "klirr-dsp"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "hound",
  "realfft",
@@ -2125,7 +2125,7 @@ dependencies = [
 
 [[package]]
 name = "klirr-native"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "cpal",
  "hound",
@@ -2137,7 +2137,7 @@ dependencies = [
 
 [[package]]
 name = "klirr-wasm"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "klirr-dsp",
 ]
