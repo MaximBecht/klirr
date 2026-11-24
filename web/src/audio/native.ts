@@ -3,6 +3,7 @@
 
 import { Channel, invoke } from '@tauri-apps/api/core';
 import type { DesktopConfig, LoadedConfig } from '../config';
+import type { NativeDiagnostics } from '../report';
 import { decodeIr } from './ir';
 import type {
   AmpEngine,
@@ -132,6 +133,26 @@ export class NativeEngine implements AmpEngine {
   /** The audio hosts (driver APIs) the native side can open, the default first. */
   static hosts(): Promise<HostInfo[]> {
     return invoke<HostInfo[]>('hosts');
+  }
+
+  /** The native side's part of a bug report: version, system, the log. */
+  static diagnostics(): Promise<NativeDiagnostics> {
+    return invoke<NativeDiagnostics>('diagnostics');
+  }
+
+  /** Adds a line to the app's log (what the UI told the user). Never fails. */
+  static log(message: string): void {
+    invoke('log_ui', { message }).catch(() => undefined);
+  }
+
+  /** Saves a bug report as `name` in the Downloads folder and shows it; returns its path. */
+  static saveReport(name: string, text: string): Promise<string> {
+    return invoke<string>('save_report', { name, text });
+  }
+
+  /** Opens one of the Help panel's links in the system's browser or mail program. */
+  static openLink(url: string): Promise<void> {
+    return invoke('open_link', { url });
   }
 
   /**

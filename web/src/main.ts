@@ -15,7 +15,9 @@ import type {
   StartOptions,
 } from './audio/types';
 import { readConfig, recallBuffer, recallHost, writeConfig, type DesktopConfig } from './config';
+import { downloadText, openInBrowser, setupHelp } from './help';
 import { CABINET_CUSTOM, CABINET_NAMES, CHANNEL_NAMES, P, spec } from './params';
+import { RecentMessages } from './report';
 import { loadSettings, saveSettings } from './settings';
 import * as fmt from './ui/format';
 import { Knob, el, type KnobOptions } from './ui/knob';
@@ -209,8 +211,24 @@ function setParam(index: P, value: number): void {
   persist();
 }
 
+/** What the status line showed, for bug reports (and the desktop app's log). */
+const messages = new RecentMessages();
+function remember(message: string, isError: boolean): void {
+  messages.push(message, isError);
+  Native?.log(isError ? `ERROR ${message}` : message);
+}
+// Script errors never reach the status line, but belong in a bug report.
+window.addEventListener('error', (e) => {
+  remember(`Script error: ${e.message} (${e.filename}:${String(e.lineno)})`, true);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  const reason: unknown = e.reason;
+  remember(`Unhandled: ${reason instanceof Error ? reason.message : String(reason)}`, true);
+});
+
 let statusTimer: ReturnType<typeof setTimeout> | undefined;
 function say(message: string, isError = false): void {
+  remember(message, isError);
   footerStatus.textContent = message;
   footerStatus.classList.toggle('is-error', isError);
   clearTimeout(statusTimer);
@@ -1134,6 +1152,58 @@ window.addEventListener('drop', (e) => {
   dropOverlay.hidden = true;
   const file = e.dataTransfer?.files[0];
   if (file) void loadIr(file);
+});
+
+// ── Help ───────────────────────────────────────────────────
+/** The audio setup for a bug report: what runs, or what Engage would open. */
+function audioReport(): [string, string][] {
+  const text = (select: HTMLSelectElement) => select.selectedOptions[0]?.text ?? '—';
+  const lines: [string, string][] = [
+    ['State', engineState],
+    ['Driver', driverName()],
+    ['Input', `${text(inputSelect)} · ${text(channelSelect)}`],
+    ['Output', engine.canChooseOutput ? text(outputSelect) : 'system default (browser)'],
+  ];
+  if (engine.running) {
+    lines.push(['Running', runningSetup().join(', ') || 'not reported']);
+    lines.push(['Input channels', String(engine.inputChannelCount())]);
+  }
+  const running = native?.runningBuffer();
+  if (native) {
+    lines.push([
+      'Buffer asked',
+      settings.buffer === null ? 'driver default' : String(settings.buffer),
+    ]);
+    lines.push(['Rate asked', settings.rate === null ? 'device default' : String(settings.rate)]);
+    if (running?.refused) lines.push(['Refused', running.refused]);
+  }
+  const e = engine.latencyEstimate();
+  if (e) {
+    const input = e.inputMs === null ? 'not reported' : ms(e.inputMs);
+    lines.push([
+      'Latency estimate',
+      `input ${input}, output ${ms(e.outputMs)}, engine ${ms(e.engineMs)}, total ${ms(e.totalMs)} (${engine.estimateSource})`,
+    ]);
+  }
+  lines.push([
+    'Measured',
+    measurement
+      ? `${ms(measurement.totalMs)} (round trip ${ms(measurement.roundTripMs)}, ${String(measurement.hits)} clicks)`
+      : 'not measured',
+  ]);
+  lines.push(['Dropouts', describeDropouts()]);
+  lines.push(['Custom IR', irName.classList.contains('is-loaded') ? 'loaded' : 'none']);
+  return lines;
+}
+
+setupHelp({
+  platform: DESKTOP ? 'desktop' : 'web',
+  diagnostics: () => (Native ? Native.diagnostics() : Promise.resolve(null)),
+  audio: audioReport,
+  params: () => [...settings.params],
+  messages: () => messages.all(),
+  openLink: (url) => (Native ? Native.openLink(url) : openInBrowser(url)),
+  saveReport: (name, text) => (Native ? Native.saveReport(name, text) : downloadText(name, text)),
 });
 
 if (DESKTOP) {

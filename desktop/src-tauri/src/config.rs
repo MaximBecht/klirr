@@ -257,6 +257,23 @@ impl Store {
     }
 }
 
+/// The app's identifier before 0.1.0-alpha.1, which named its config folder.
+pub const LEGACY_IDENTIFIER: &str = "io.github.maximbecht.klirr";
+
+/// Copies the settings file from the folder of an older identifier (`legacy`, a sibling of
+/// `dir`) into `dir`, if `dir` has none yet. The old folder is left as it was. Returns whether
+/// a file was copied.
+pub fn adopt_legacy(dir: &Path, legacy: &str) -> bool {
+    let target = dir.join(FILE);
+    let Some(source) = dir.parent().map(|p| p.join(legacy).join(FILE)) else {
+        return false;
+    };
+    if target.exists() || !source.is_file() {
+        return false;
+    }
+    fs::create_dir_all(dir).is_ok() && fs::copy(&source, &target).is_ok()
+}
+
 /// The version a file says it is.
 fn version_of(path: &Path) -> Option<u32> {
     let text = fs::read_to_string(path).ok()?;
@@ -421,6 +438,26 @@ mod tests {
         );
         assert!(!dir.join(FILE).exists());
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn settings_of_the_old_identifier_are_copied_once() {
+        let root = temp_dir("legacy");
+        let (old, new) = (root.join("old.id"), root.join("new.id"));
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join(FILE), sample().to_string()).unwrap();
+        assert!(adopt_legacy(&new, "old.id"));
+        let (_, config, status) = Store::open(&new);
+        assert_eq!(status, Status::Loaded);
+        assert_eq!(config.audio.host, "asio");
+        assert!(old.join(FILE).exists());
+        // Never over a file the new folder has already.
+        fs::write(new.join(FILE), "{}").unwrap();
+        assert!(!adopt_legacy(&new, "old.id"));
+        assert_eq!(fs::read_to_string(new.join(FILE)).unwrap(), "{}");
+        // Nothing to copy.
+        assert!(!adopt_legacy(&root.join("other.id"), "missing.id"));
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

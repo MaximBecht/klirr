@@ -138,6 +138,11 @@ press **Engage** and allow audio input. Your settings are remembered in the brow
 - Many interfaces show up as one stereo device: *Input 1* is the left channel, *Input 2* the
   right one.
 
+**Help** shows the version and build, and helps report a bug: *Write Email* opens your mail
+program with a message to support@bechtstudio.com. Only if you tick the box does it include your
+system and audio setup and save a report file for you to attach (in the desktop app, with its
+recent log); *What is included* shows the whole report first. Klirr sends nothing itself.
+
 Other scripts in `web/`:
 
 ```sh
@@ -233,12 +238,20 @@ remembers its own devices and each output device its own buffer and rate. The **
 is the measuring tool: the loopback measurement, and how much of it the driver does not report.
 
 The app keeps its settings in `settings.json` in its config folder
-(`%APPDATA%\io.github.maximbecht.klirr` on Windows,
-`~/Library/Application Support/io.github.maximbecht.klirr` on macOS,
-`~/.config/io.github.maximbecht.klirr` on Linux), the same format on every platform. The file
+(`%APPDATA%\com.bechtstudio.klirr` on Windows,
+`~/Library/Application Support/com.bechtstudio.klirr` on macOS,
+`~/.config/com.bechtstudio.klirr` on Linux), the same format on every platform. The file
 is versioned (`"version"`); an older one is migrated when it is read, fields the app does not
 know are kept, an unreadable one is kept as `settings.broken.json`, and a newer app's file is
-copied to `settings.v<N>.json` before an older app writes over it.
+copied to `settings.v<N>.json` before an older app writes over it. Builds before 0.1.0-alpha.1
+used the folder `io.github.maximbecht.klirr`; its settings are copied over once, on the first
+start, and the old folder is left as it was.
+
+The app also keeps a log of what it opened and what failed (no audio, no knob turns) in
+`klirr.log` in its log folder (`%LOCALAPPDATA%\com.bechtstudio.klirr\logs` on Windows,
+`~/Library/Logs/com.bechtstudio.klirr` on macOS, `~/.local/share/com.bechtstudio.klirr/logs`
+on Linux). Each start keeps the last run's log as `klirr.previous.log`. The home folder shows as
+`~` in it.
 
 You need Node.js 20.19 or newer and the web app's dependencies (`npm install` in `web/`). Rust
 1.90 or newer builds the app. On Linux it also needs WebKitGTK and a few libraries (see

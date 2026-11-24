@@ -36,7 +36,9 @@ why. Update it when a decision changes.
 | Native audio backends | `cpal`: WASAPI shared + optional ASIO on Windows, Core Audio, ALSA/JACK. WASAPI exclusive through the `wasapi` crate (safe bindings, Windows only) |
 | Distribution (desktop) | GitHub Releases built by CI; the site's download button links to the latest release |
 | Cabinet sound | Built-in cabinets generated in code (no third-party files) + load your own IR |
-| Technical names | repo `klirr`, crate `klirr-dsp`, web package `klirr-web` |
+| Technical names | repo `klirr`, crate `klirr-dsp`, web package `klirr-web`, desktop app id `com.bechtstudio.klirr` |
+| Web address | `klirr.bechtstudio.com` (the app); product page on bechtstudio.com |
+| Bug reports | Email to support@bechtstudio.com from the Help panel; the report (system, audio setup, log) only with the user's consent, saved as a file to attach. No server |
 
 ### Why Rust from the start
 
@@ -309,6 +311,8 @@ high-gain stage measures around −22 dB.
   live parameters and IRs, meters, latency estimate and loopback measurement
 - [ ] Desktop: buffer size and sample rate menus, device hot-plug events, ASIO in a release
   build
+- [x] Help panel: version and build, links, bug report by email with an optional report file
+  (desktop: with the app's log, which survives a crash)
 - [ ] Release workflow → GitHub Releases, download button on the site
 - [ ] Code signing
 
