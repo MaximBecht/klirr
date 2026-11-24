@@ -34,11 +34,13 @@ why. Update it when a decision changes.
 | Hosting | Cloudflare Workers **static assets** (no Worker code on the request path) |
 | Desktop (later) | Tauri: UI in the webview, audio in the native Rust backend via `cpal` |
 | Native audio backends | `cpal`: WASAPI shared + optional ASIO on Windows, Core Audio, ALSA/JACK. WASAPI exclusive through the `wasapi` crate (safe bindings, Windows only) |
-| Distribution (desktop) | GitHub Releases built by CI; the site's download button links to the latest release |
+| Distribution (desktop) | GitHub Releases built by CI from a version tag; the site's download button links to the releases page |
 | Cabinet sound | Built-in cabinets generated in code (no third-party files) + load your own IR |
 | Technical names | repo `klirr`, crate `klirr-dsp`, web package `klirr-web`, desktop app id `com.bechtstudio.klirr` |
 | Web address | `klirr.bechtstudio.com` (the app); product page on bechtstudio.com |
 | Bug reports | Email to support@bechtstudio.com from the Help panel; the report (system, audio setup, log) only with the user's consent, saved as a file to attach. No server |
+| Windows installer | One installer with both builds; **ASIO support (GPLv3)** is a component, selected by default |
+| Release trust | `SHA256SUMS`, a GitHub build attestation per file, immutable releases; code signing later |
 
 ### Why Rust from the start
 
@@ -79,11 +81,13 @@ klirr/
 ├── crates/
 │   ├── klirr-dsp/        # Pure Rust DSP core: no I/O, no allocation while processing
 │   ├── klirr-wasm/       # C-ABI exports of the core for the AudioWorklet
-│   └── klirr-native/     # Native audio host (cpal); the desktop app's audio side
+│   ├── klirr-native/     # Native audio host (cpal); the desktop app's audio side
+│   └── klirr-asio/       # Opens an ASIO driver's own control panel (cpal has none)
 ├── web/                  # Vite + TypeScript UI, AudioWorklet host; also the desktop UI
 ├── desktop/              # Tauri app: the web UI on the native audio host
 ├── docs/                 # This plan; later user and developer docs
-└── .github/workflows/    # CI/CD
+├── scripts/              # Repository tools (`version.mjs` sets the version everywhere)
+└── .github/workflows/    # CI (`ci.yml`) and release builds (`release.yml`)
 ```
 
 ### 4.2 Signal chain
@@ -193,7 +197,7 @@ high-gain stage measures around −22 dB.
 - Free-plan asset limits: 20,000 files, 25 MiB per file — far more than needed.
 - Unconfirmed: whether SPA fallback (`not_found_handling`) counts as a Worker request.
   Irrelevant here: a single page needs no fallback.
-- Hosting on a subdomain of the existing domain (e.g. `klirr.<your-domain>`).
+- Hosted on a subdomain of the existing domain: `klirr.bechtstudio.com`.
 - Only a future API (e.g. saved/shared presets in KV or D1) would count requests, and only for
   those calls.
 
@@ -203,7 +207,10 @@ high-gain stage measures around −22 dB.
   **same** latency as the browser, so the audio must run in Tauri's **native Rust backend**.
 - Audio I/O via `cpal` (`crates/klirr-native`): WASAPI, and ASIO with an extra build step
   (`--features asio`: LLVM for bindgen; the SDK is downloaded by the build). Target latency
-  ~5–10 ms.
+  ~5–10 ms. asio-sys's own SDK download breaks on fresh machines such as CI runners, so the
+  release workflow fetches the SDK itself (checked against a SHA-256) and sets
+  `CPAL_ASIO_DIR`. Builds without `asio` need no SDK; `klirr-asio` (the driver's control
+  panel) builds it only with its `sdk` feature.
 - cpal's WASAPI is **shared mode only**, with the period Windows picks (usually 10 ms), and
   keeps its client buffer (about 22 ms) full. The low latency comes from ASIO on Windows and
   Core Audio on macOS.
@@ -237,11 +244,22 @@ high-gain stage measures around −22 dB.
   is prepared off the audio thread (`klirr_dsp::CustomIr`) and swapped in, the old one sent
   back to be freed, so the audio thread never allocates. Meters go to the webview 30 times a
   second over a Tauri channel, latency figures once a second.
-- Installers are small (≈3–10 MB) because no browser is bundled.
-- **Distribution:** `tauri-action` builds Windows/macOS/Linux installers on a release tag and
-  attaches them to a GitHub Release. Download button →
-  `github.com/MaximBecht/klirr/releases/latest` (or `/releases/latest/download/<file>` with fixed
-  asset names). Tauri's updater can read from the same releases. No Google Drive.
+- The desktop UI keeps the whole audio setup in an **Audio** panel (driver, devices, sample
+  rate and buffer size menus where the driver lets Klirr choose, latency, test tone, Hardware
+  Setup) and has a **Help** menu. When an ASIO driver asks for a restart, the app reopens the
+  devices by itself. Settings live in a versioned `settings.json`; a log survives a crash.
+- Installers are small because no browser is bundled. Measured for 0.1.0-alpha.1: Windows
+  installer (both builds) 3.3 MiB, macOS universal `.dmg` 6.3 MiB; the Linux AppImage and
+  `.deb` together 82 MiB (the AppImage bundles its libraries).
+- **Distribution:** `.github/workflows/release.yml` runs on a version tag: Windows installer,
+  macOS universal disk image (signed ad hoc, not notarised), Linux AppImage and `.deb`, and a
+  source tarball with the ASIO SDK the Windows build used. It drafts a GitHub release with
+  `SHA256SUMS` and a build attestation for each file; the draft is published by hand, and
+  immutable releases fix the assets and tag once published. Pull requests that touch release
+  files run the same builds as a dry run. `scripts/version.mjs set <version>` writes the
+  version to every file that holds it. **0.1.0-alpha.1 was published on 2026-11-24** as a
+  pre-release. Download button → `github.com/MaximBecht/klirr/releases` (`/releases/latest`
+  skips pre-releases). Tauri's updater can read from the same releases. No Google Drive.
 - **Licensing per target.** The ASIO SDK is dual-licensed since October 2025: proprietary or
   GPLv3. GPL obligations attach to the binaries that contain the SDK, not to the repository:
   - The source stays **MIT** everywhere. The SDK is not in the repository; the `asio` build
@@ -252,12 +270,21 @@ high-gain stage measures around −22 dB.
     ships the GPLv3 text, a notice naming the SDK, and a link to the exact source tag with
     build steps; all dependencies of that build must be GPLv3-compatible (MIT and Apache-2.0
     are). The "ASIO" name and logo follow Steinberg's trademark rules.
-  - Optional: a WASAPI-only Windows build that stays MIT, for anyone who needs that.
-  - Alternative: sign Steinberg's proprietary ASIO license instead, which keeps the Windows
-    binary MIT as well.
+  - **Decided:** one Windows installer holds both builds. *ASIO support (GPLv3)* is a
+    component, selected by default, that installs the ASIO build in place of the MIT
+    (WASAPI-only) one; `/ASIO=0` or `/ASIO=1` sets it for silent installs. The GPLv3 text and
+    the source link ship whatever the choice. The NSIS template is Tauri's, with the changes
+    marked, in `desktop/src-tauri/windows/`.
+  - Release builds install `THIRD-PARTY-NOTICES.txt` (every crate, npm package and prebuilt
+    library with its license), generated by `npm run notices` with cargo-about.
+  - Alternative, if ever needed: Steinberg's proprietary ASIO license, which would keep the
+    Windows binary MIT as well.
 - **Code signing:** unsigned Windows installers show a SmartScreen warning (SignPath offers
   free signing for open source; Azure Trusted Signing ≈ $10/month). macOS needs an Apple
-  Developer account ($99/year) for signing + notarisation. It is fine to launch unsigned first.
+  Developer account ($99/year) for signing + notarisation. The alpha launched unsigned; the
+  release notes explain how to start it (Windows: *More info › Run anyway*; macOS 15 and
+  newer: *System Settings › Privacy & Security › Open Anyway*, since right-click › *Open* no
+  longer gets past Gatekeeper).
 
 ## 7. Quality and project hygiene
 
@@ -267,8 +294,10 @@ high-gain stage measures around −22 dB.
   checks that sound flows, stays finite and under the limiter ceiling, and stops).
 - **CI (GitHub Actions):** `cargo fmt --check`, `clippy -D warnings`, tests, a
   `wasm32-unknown-unknown` build, and web lint/format/typecheck/test/build/smoke test on every
-  push/PR. Later: preview deploy per PR, production deploy on `main` via `wrangler`, desktop release builds on
-  tags.
+  push/PR. Desktop release builds on version tags (`release.yml`; a dry run on PRs that touch
+  release files). Later: preview deploy per PR, production deploy on `main` via `wrangler`.
+- **Merging:** a branch per piece of work, a PR with CI green on all three OSes, merged with
+  rebase (straight history on `main`).
 - **Docs:** README to start. When the project grows: a `docs/` folder (user guide, DSP design,
   contributing).
 - Dependabot for Cargo, npm and GitHub Actions.
@@ -280,7 +309,7 @@ high-gain stage measures around −22 dB.
 - [x] Gate, high-pass, three amp channels with 4× oversampling + ADAA, DC blocker
 - [x] Tone stack (SVF), generated cabinets + custom IR convolution
 - [x] Delay, reverb, safety limiter, parameter smoothing, meters
-- [x] Regression tests for every artefact in section 3 (45 tests in total)
+- [x] Regression tests for every artefact in section 3 (46 DSP tests in total)
 - [x] Offline `render` example (process a DI `.wav`) and `bench` example
 - [x] First version of the tube logo (`docs/assets/logo.svg`)
 - [ ] Listening test with real DI recordings; tune voicings and cabinets by ear
@@ -295,26 +324,43 @@ high-gain stage measures around −22 dB.
 - [x] Playwright smoke test with Chrome's fake microphone
 - [x] Latency panel: live browser-reported breakdown, loopback measurement (on request only),
   dropout counter (audio clock vs wall clock)
-- [ ] Test with a real guitar in Chrome, Edge and Firefox; check latency figures
+- [ ] Test with a real guitar in Chrome, Edge and Firefox; measure the browser's latency with
+  the loopback probe (the README's 20–40 ms is still an estimate)
 
 ### Phase 3 — Public launch
-- [ ] Trademark / GitHub / crates.io / domain check for "Klirr"
-- [ ] Cloudflare deployment (static assets only), preview deploys per PR
-- [ ] Make the GitHub repository public
+- [x] Trademark / GitHub / crates.io / domain check for "Klirr"
+- [x] Make the GitHub repository public (immutable releases enabled)
+- [x] First public release: **v0.1.0-alpha.1** (desktop, pre-release), published 2026-11-24
+- [ ] Cloudflare deployment of the web app at `klirr.bechtstudio.com` (static assets only,
+  `wrangler` deploy on `main`; needs a Cloudflare API token as a repository secret)
+- [ ] Preview deploys per PR
+- [ ] Product page on bechtstudio.com (`/en/work/klirr`, `/de/arbeit/klirr`) with a "Try in
+  browser" button and a Download button to the GitHub releases
 
 ### Phase 4 — Desktop app
 - [x] Native audio host (`crates/klirr-native`, `cpal`): WASAPI, optional ASIO, Core Audio,
   ALSA/JACK; `devices`, `measure` (loopback probe, same as the web) and `play` commands
-- [ ] Measure native vs browser latency on real hardware (WASAPI, ASIO)
+- [x] Measure native latency on real hardware (Focusrite Scarlett: ASIO, WASAPI exclusive and
+  shared; figures in section 6)
+- [ ] Measure the browser on the same hardware for the direct comparison (see Phase 2)
 - [x] Optional WASAPI exclusive backend (`wasapi` crate, Windows only)
 - [x] Tauri app with the `cpal` audio backend (`desktop/`): the web UI with a driver menu,
   live parameters and IRs, meters, latency estimate and loopback measurement
-- [ ] Desktop: buffer size and sample rate menus, device hot-plug events, ASIO in a release
-  build
+- [x] Desktop: Audio panel with buffer size and sample rate menus, Hardware Setup (ASIO
+  control panel, system sound settings), test tone; reopens the devices when an ASIO driver
+  asks for a restart
+- [ ] Desktop: device hot-plug events (devices added or removed while the app runs)
+- [x] ASIO in a release build: one Windows installer, ASIO as a pre-selected GPLv3 component;
+  third-party notices installed with release builds
 - [x] Help panel: version and build, links, bug report by email with an optional report file
   (desktop: with the app's log, which survives a crash)
-- [ ] Release workflow → GitHub Releases, download button on the site
-- [ ] Code signing
+- [x] Release workflow → GitHub Releases (Windows, macOS universal, Linux AppImage + `.deb`,
+  source + ASIO SDK, `SHA256SUMS`, build attestations)
+- [x] Tested the 0.1.0-alpha.1 builds on real machines: Windows, macOS 26, Ubuntu
+- [ ] Linux: the fixed-size window opens taller than its content (dark space below; cause not
+  known yet)
+- [ ] Download button on the site (with the product page, Phase 3)
+- [ ] Code signing (SignPath for Windows; Apple notarisation)
 
 ### Later ideas
 - Presets (local first; optionally shared via a small Worker API with KV/D1)
@@ -324,7 +370,10 @@ high-gain stage measures around −22 dB.
 
 ## 9. Open questions
 
-- Is "Klirr" free to use? (EUIPO/USPTO, GitHub, crates.io, npm, domains)
-- Steinberg ASIO SDK license for the Windows release: GPLv3 for the ASIO build (see
-  section 6) or Steinberg's proprietary agreement. Decide before the first Windows release.
 - Code-signing route for Windows (SignPath vs. Azure Trusted Signing).
+- Why the Linux window opens taller than its fixed size (WebKitGTK, the window manager or
+  Tauri).
+
+Settled: the name "Klirr" is free to use (trademarks, GitHub, crates.io, npm, domains). The
+ASIO SDK license for the Windows release is GPLv3 for the ASIO build, shipped as an optional
+component of the one installer (section 6).
