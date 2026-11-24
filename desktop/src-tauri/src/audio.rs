@@ -20,6 +20,8 @@ use klirr_native::{devices, setup};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 
+use crate::log;
+
 /// How often meters are sent while audio runs.
 const METER_PERIOD: Duration = Duration::from_millis(33);
 /// How often the latency figures are sent while audio runs.
@@ -232,6 +234,8 @@ struct Running {
     /// first status, a second after start.
     startup_underruns: Option<u32>,
     backend_errors: u32,
+    /// The dropout count last logged.
+    logged_dropouts: u32,
     measurement: Option<Reply<MeasureReply>>,
     last_meters: Instant,
     last_status: Instant,
@@ -264,9 +268,15 @@ impl Controller {
     fn handle(&mut self, request: Request) {
         match request {
             Request::Start(request, events, reply) => {
-                let _ = reply.send(self.start(&request, events));
+                log::info(format!("start: {}", describe_request(&request)));
+                let result = self.start(&request, events);
+                log_started(&result);
+                let _ = reply.send(result);
             }
             Request::Stop(reply) => {
+                if self.running.is_some() {
+                    log::info("stop");
+                }
                 self.stop();
                 let _ = reply.send(());
             }
@@ -283,6 +293,12 @@ impl Controller {
                         .map(drop)
                         .map_err(|e| e.to_string()),
                 };
+                match &result {
+                    Ok(()) => {
+                        log::info(format!("IR loaded: {} samples at {rate} Hz", samples.len()))
+                    }
+                    Err(e) => log::error(format!("IR refused: {e}")),
+                }
                 if result.is_ok() {
                     self.ir = Some((samples, rate));
                 }
@@ -300,6 +316,10 @@ impl Controller {
                 let running = self.running.as_ref().map(|r| &r.duplex);
                 let result = setup::open(host.as_deref(), output.as_deref(), running)
                     .map_err(|e| e.to_string());
+                match &result {
+                    Ok(()) => log::info(format!("hardware setup opened for {host:?}")),
+                    Err(e) => log::error(format!("hardware setup for {host:?}: {e}")),
+                }
                 let _ = reply.send(result);
             }
             Request::Measure(reply) => match &mut self.running {
@@ -394,6 +414,7 @@ impl Controller {
             tone_unsent: false,
             startup_underruns: None,
             backend_errors: 0,
+            logged_dropouts: 0,
             measurement: None,
             last_meters: now,
             last_status: now,
@@ -425,7 +446,10 @@ impl Controller {
         } = old;
         // The old streams close before the driver is opened again.
         drop(duplex);
-        match self.start(&request, events.clone()) {
+        log::info("the driver asked for a restart");
+        let result = self.start(&request, events.clone());
+        log_started(&result);
+        match result {
             Ok(started) => {
                 if let Some(r) = &mut self.running {
                     r.tone = tone;
@@ -470,6 +494,7 @@ impl Controller {
                 }
                 Err(MeasureError::Stalled) => MeasureReply::failed("stopped"),
             };
+            log::info(format!("measurement: {reply:?}"));
             if let Some(tx) = r.measurement.take() {
                 let _ = tx.send(reply);
             }
@@ -490,16 +515,70 @@ impl Controller {
             r.last_status = now;
             r.startup_underruns
                 .get_or_insert_with(|| stats.underruns.load(Ordering::Relaxed));
-            let _ = r.events.send(status(r));
+            let status = status(r);
+            if let Event::Status {
+                dropouts, added_ms, ..
+            } = status
+                && dropouts != r.logged_dropouts
+            {
+                r.logged_dropouts = dropouts;
+                log::info(format!(
+                    "dropouts: {dropouts} since start, {added_ms:.1} ms added"
+                ));
+            }
+            let _ = r.events.send(status);
         }
         let errors = stats.backend_errors.load(Ordering::Relaxed);
         if errors > r.backend_errors {
             // Once per run: a flaky device would otherwise repeat it every tick.
             if r.backend_errors == 0 {
+                log::error("the audio device reported an error (unplugged?)");
                 let _ = r.events.send(Event::DeviceError);
             }
             r.backend_errors = errors;
         }
+    }
+}
+
+/// What a start asks for, for the log (without the parameters).
+fn describe_request(r: &StartRequest) -> String {
+    let or_default = |s: &str| {
+        if s.is_empty() {
+            "default".to_owned()
+        } else {
+            format!("{s:?}")
+        }
+    };
+    format!(
+        "host {}, input {}, output {}, channel {}, buffer {:?}, rate {:?}",
+        or_default(&r.host),
+        or_default(&r.input),
+        or_default(&r.output),
+        r.channel + 1,
+        r.buffer,
+        r.rate
+    )
+}
+
+fn log_started(result: &Result<Started, String>) {
+    match result {
+        Ok(s) => log::info(format!(
+            "running: {} | in {:?} ({} ch) | out {:?} | {} Hz | buffer in {:?} out {:?} (asked {:?}) | engine {} samples{}",
+            s.host,
+            s.input,
+            s.input_channels,
+            s.output,
+            s.sample_rate,
+            s.input_buffer,
+            s.output_buffer,
+            s.requested_buffer,
+            s.engine_latency,
+            s.buffer_refused
+                .as_ref()
+                .map(|e| format!(" | refused: {e}"))
+                .unwrap_or_default()
+        )),
+        Err(e) => log::error(format!("could not start: {e}")),
     }
 }
 

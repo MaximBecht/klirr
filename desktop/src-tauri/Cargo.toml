@@ -19,9 +19,11 @@ tauri-build = { version = "2.5", features = [] }
 [dependencies]
 klirr-dsp = { path = "../../crates/klirr-dsp" }
 klirr-native = { path = "../../crates/klirr-native" }
+os_info = { version = "3.15", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2.12", features = [] }
+tauri-plugin-opener = { version = "2.7", default-features = false }
 
 [features]
 # ASIO on Windows. Needs LLVM (libclang) to build; see the README.

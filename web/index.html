@@ -41,6 +41,15 @@
         >
           LATENCY
         </button>
+        <button
+          type="button"
+          class="menu-item"
+          id="menu-help"
+          popovertarget="help-panel"
+          aria-haspopup="dialog"
+        >
+          HELP
+        </button>
       </nav>
 
       <header class="amp-header">
@@ -454,6 +463,99 @@
             ms.
           </p>
         </div>
+      </div>
+
+      <div
+        class="panel panel--narrow"
+        id="help-panel"
+        popover
+        role="dialog"
+        aria-labelledby="help-title"
+      >
+        <div class="panel-head">
+          <h2 id="help-title">HELP</h2>
+          <button
+            type="button"
+            class="panel-close"
+            popovertarget="help-panel"
+            popovertargetaction="hide"
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <section class="settings-section" aria-labelledby="about-title">
+          <h3 class="settings-heading" id="about-title">ABOUT</h3>
+          <dl class="settings-rows settings-values">
+            <dt class="settings-label">Version</dt>
+            <dd id="about-version">—</dd>
+            <dt class="settings-label">Build</dt>
+            <dd id="about-build">—</dd>
+            <dt class="settings-label">License</dt>
+            <dd id="about-license">MIT</dd>
+          </dl>
+          <p class="settings-note">
+            Klirr is free and open source, made by BechtStudio. All sound is processed on your
+            computer; nothing is uploaded.
+          </p>
+          <p class="help-links">
+            <a href="https://bechtstudio.com/en/work/klirr" target="_blank" rel="noopener"
+              >Website</a
+            >
+            <a href="https://github.com/MaximBecht/klirr" target="_blank" rel="noopener"
+              >Source code</a
+            >
+            <a href="https://github.com/MaximBecht/klirr/releases" target="_blank" rel="noopener"
+              ><span data-web>Desktop app</span><span data-desktop hidden>Releases</span></a
+            >
+            <a
+              href="https://klirr.bechtstudio.com/"
+              target="_blank"
+              rel="noopener"
+              data-desktop
+              hidden
+              >Web version</a
+            >
+          </p>
+        </section>
+
+        <section class="settings-section" aria-labelledby="report-title">
+          <h3 class="settings-heading" id="report-title">REPORT A BUG</h3>
+          <p class="settings-note">
+            Something not working? Write to
+            <a class="help-mail" href="mailto:support@bechtstudio.com">support@bechtstudio.com</a>:
+            what you did, what you expected and what happened instead.
+          </p>
+          <label class="report-consent">
+            <input type="checkbox" id="report-consent" />
+            <span
+              >Include information about my system and audio setup<span data-desktop hidden>
+                and the app's recent log</span
+              ></span
+            >
+          </label>
+          <details class="report-preview" id="report-preview-box">
+            <summary>What is included</summary>
+            <pre id="report-preview"></pre>
+          </details>
+          <div class="report-actions">
+            <button type="button" class="btn btn--ghost" id="report-email">WRITE EMAIL</button>
+            <button type="button" class="btn btn--ghost" id="report-save" disabled>
+              SAVE FILE
+            </button>
+            <button type="button" class="btn btn--ghost" id="report-copy" disabled>COPY</button>
+          </div>
+          <p class="settings-note" id="report-status" role="status" aria-live="polite"></p>
+          <p class="settings-note">
+            Klirr sends nothing itself. Write Email opens your mail program with a short message;
+            with the box ticked, it also saves the report as a file for you to attach. You see
+            everything before you send it. The report holds no personal data beyond the names of
+            your audio devices<span data-desktop hidden
+              >; folder paths show your home folder as ~</span
+            >.
+          </p>
+        </section>
       </div>
 
       <div class="drop-overlay" id="drop-overlay" hidden>
