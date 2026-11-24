@@ -3,18 +3,20 @@
 //!
 //! cpal does not offer this, but its `asio-sys` library holds the whole ASIO SDK, including
 //! `ASIOControlPanel`, which works on the driver that is loaded at the time. ASIO loads one
-//! driver per process: either the one cpal runs audio on ([`open_loaded`]) or, while no audio
-//! runs, one loaded just for the panel ([`open`]).
+//! driver per process: either the one cpal runs audio on (`open_loaded`) or, while no audio
+//! runs, one loaded just for the panel (`open`).
 //!
 //! Call both from the thread that runs (or will run) the audio streams: ASIO drivers are COM
 //! objects that expect to stay on the thread that loaded them. Some drivers show the panel as
 //! a dialog and return once it is closed; others open it (or a separate program) and return at
 //! once, and an in-process window needs that thread to dispatch its messages
-//! ([`pump_messages`]).
+//! (`pump_messages`).
 //!
-//! On platforms other than Windows the crate is empty.
+//! The crate holds code only on Windows with the `sdk` feature, which builds the ASIO SDK
+//! (`klirr-native`'s `asio` feature turns it on); otherwise it is empty, so a workspace build
+//! never needs the SDK. The names above are not links because the items are missing then.
 
-#![cfg(windows)]
+#![cfg(all(windows, feature = "sdk"))]
 
 use std::fmt;
 
