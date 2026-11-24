@@ -273,6 +273,22 @@ You need Node.js 20.19 or newer and the web app's dependencies (`npm install` in
 librsvg2-dev libasound2-dev`. The app icons are rendered from `desktop/icon.svg` with
 `npm run icons`.
 
+### Releasing
+
+A version tag builds a release (`.github/workflows/release.yml`): the Windows installer, a
+macOS disk image (Apple silicon and Intel, signed ad hoc, not notarised), a Linux AppImage and
+`.deb`, and the source with the ASIO SDK the Windows build used. It drafts a GitHub release
+with them, `SHA256SUMS` and a build attestation for each file. Pull requests that change how
+releases are built run the same builds as a dry run.
+
+1. `node scripts/version.mjs set 0.1.0-alpha.1` writes the version to every file that holds it
+   (`Cargo.toml` and `Cargo.lock`, `package.json` and `package-lock.json` in `web/` and
+   `desktop/`). Merge that to `main`.
+2. Tag the merge on `main` and push the tag: `git tag v0.1.0-alpha.1 && git push origin
+   v0.1.0-alpha.1`. The workflow checks the tag against the version.
+3. Read the draft release, edit its notes (from `.github/release-notes.md`) and publish it. A
+   version with a pre-release part (`-alpha.1`) is marked as a pre-release.
+
 ## Contributing
 
 Issues and pull requests are welcome. CI runs formatting, clippy, tests on Linux, Windows and
