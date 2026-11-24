@@ -1,0 +1,250 @@
+name: Release
+
+# A version tag (v1.2.3, v1.2.3-alpha.1) builds the desktop app for Windows, macOS and Linux and
+# drafts a GitHub release with the installers, the source with the ASIO SDK, SHA256SUMS and
+# build attestations. The draft is published by hand, after a look at it: published releases
+# are immutable. Run by hand (workflow_dispatch) or on a pull request that changes how releases
+# are built, it builds everything as a dry run and keeps the files as workflow artifacts,
+# without a release.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - .github/release-notes.md
+      - scripts/version.mjs
+      - desktop/scripts/**
+      - desktop/notices/**
+      - desktop/src-tauri/windows/**
+      - desktop/src-tauri/tauri*.conf.json
+      - desktop/src-tauri/Info.plist
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  # A newer push to a pull request replaces its dry run; a tag's build always finishes
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # The ASIO SDK the Windows ASIO build is made with, pinned: Steinberg's own link
+  # (steinberg.net/asiosdk) moves to each new SDK.
+  ASIO_SDK_URL: https://download.steinberg.net/sdk_downloads/ASIO-SDK_2.3.4_2025-10-15.zip
+  ASIO_SDK_SHA256: d5ebf0c20dd2c5f43771fd0c1418f4b361bf52434ee670097cfa6b3a335e2eca
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      # On a tag, the tag must match the version in every file (scripts/version.mjs)
+      - id: version
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: echo "version=$(node scripts/version.mjs check $TAG)" >> "$GITHUB_OUTPUT"
+
+  asio-sdk:
+    name: ASIO SDK
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -fsSL -o asio-sdk.zip "$ASIO_SDK_URL"
+          echo "$ASIO_SDK_SHA256  asio-sdk.zip" | sha256sum -c -
+      - uses: actions/upload-artifact@v7
+        with:
+          name: asio-sdk
+          path: asio-sdk.zip
+          retention-days: 1
+
+  windows:
+    name: Windows installer
+    needs: [version, asio-sdk]
+    runs-on: windows-latest
+    env:
+      # LLVM is on the runner; its libclang makes the ASIO SDK's bindings
+      LIBCLANG_PATH: C:\Program Files\LLVM\bin
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      # Outside the checkout, which must stay clean: the build's commit reads "+dirty" otherwise
+      - uses: actions/download-artifact@v8
+        with:
+          name: asio-sdk
+          path: ${{ runner.temp }}
+      # asio-sys's own download unpacks to a layout it then cannot find, so it gets the SDK here
+      - shell: pwsh
+        run: |
+          Expand-Archive "$env:RUNNER_TEMP\asio-sdk.zip" -DestinationPath "$env:RUNNER_TEMP\asio"
+          "CPAL_ASIO_DIR=$env:RUNNER_TEMP\asio\ASIOSDK" >> $env:GITHUB_ENV
+      - run: npm ci
+        working-directory: web
+      # The UI's sources import the wasm module, though the desktop build does not use it
+      - run: npm run build:wasm
+        working-directory: web
+      - run: npm ci
+        working-directory: desktop
+      - run: npm run build:windows
+        working-directory: desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+
+  macos:
+    name: macOS disk image
+    needs: version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin, wasm32-unknown-unknown
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - run: npm ci && npm run build:wasm
+        working-directory: web
+      - run: npm ci && npm run notices
+        working-directory: desktop
+      # One app for Apple silicon and Intel; signed ad hoc (tauri.macos.conf.json), not notarised
+      - run: npx tauri build --config src-tauri/tauri.release.conf.json --target universal-apple-darwin --bundles dmg
+        working-directory: desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  linux:
+    name: Linux packages
+    needs: version
+    # The oldest supported Ubuntu: an AppImage runs on systems with this glibc or newer
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            desktop/package-lock.json
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about
+      - run: >-
+          sudo apt-get update && sudo apt-get install -y libasound2-dev libwebkit2gtk-4.1-dev
+          libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+      - run: npm ci && npm run build:wasm
+        working-directory: web
+      - run: npm ci && npm run notices
+        working-directory: desktop
+      - run: npx tauri build --config src-tauri/tauri.release.conf.json --bundles appimage,deb
+        working-directory: desktop
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+          if-no-files-found: error
+
+  source:
+    name: Source with the ASIO SDK
+    needs: [version, asio-sdk]
+    runs-on: ubuntu-latest
+    env:
+      NAME: klirr-${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: asio-sdk
+          path: ${{ runner.temp }}
+      # The complete source of the release, the Corresponding Source the GPLv3 asks for with the
+      # ASIO build: the repository at this commit, and the ASIO SDK that build was made with
+      - run: |
+          git archive --format=tar --prefix="$NAME/" -o source.tar HEAD
+          mkdir -p "stage/$NAME"
+          unzip -q "$RUNNER_TEMP/asio-sdk.zip" -d "stage/$NAME"
+          cat > "stage/$NAME/ASIOSDK-README.txt" <<EOF
+          ASIOSDK/ is the Steinberg ASIO SDK that the Windows build of $NAME with ASIO support
+          was made with ($ASIO_SDK_URL), used under the GPLv3: see its LICENSE.txt.
+
+          To build that installer on Windows (with LLVM for libclang, see README.md):
+
+            set CPAL_ASIO_DIR=<this folder>\ASIOSDK
+            cd web && npm ci && npm run build:wasm
+            cd ..\desktop && npm ci && npm run build:windows
+          EOF
+          tar -rf source.tar -C stage "$NAME/ASIOSDK" "$NAME/ASIOSDK-README.txt"
+          gzip -9 -n -c source.tar > "$NAME-source.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: source
+          path: klirr-*-source.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Draft the release
+    if: github.ref_type == 'tag'
+    needs: [version, windows, macos, linux, source]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # the release
+      id-token: write # the attestations' signing certificate
+      attestations: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TAG: ${{ github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          pattern: '{windows,macos,linux,source}'
+          merge-multiple: true
+      - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: dist/*
+      - run: |
+          sed "s/{{VERSION}}/$VERSION/g; s/{{TAG}}/$TAG/g" .github/release-notes.md > notes.md
+          prerelease=$([[ "$VERSION" == *-* ]] && echo --prerelease || true)
+          gh release create "$TAG" dist/* --draft $prerelease --verify-tag \
+            --title "Klirr $VERSION" --notes-file notes.md
