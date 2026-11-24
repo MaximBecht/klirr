@@ -22,7 +22,7 @@ klirr-asio = { path = "../klirr-asio", optional = true }
 
 [features]
 # ASIO on Windows. Needs LLVM (libclang) to build; see the README.
-asio = ["cpal/asio", "dep:klirr-asio"]
+asio = ["cpal/asio", "klirr-asio/sdk"]
 
 [lints]
 workspace = true

@@ -8,16 +8,21 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-# Windows only; elsewhere the crate is empty.
+# Windows only, and only with the `sdk` feature; otherwise the crate is empty.
 [target.'cfg(windows)'.dependencies]
 # The same asio-sys cpal uses (`links = "asio"` allows only one): its library holds the
 # ASIO SDK, whose `ASIOControlPanel` this crate calls.
-asio-sys = "0.4"
-windows-sys = { version = "0.61", features = [
+asio-sys = { version = "0.4", optional = true }
+windows-sys = { version = "0.61", optional = true, features = [
     "Win32_Foundation",
     "Win32_System_Com",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+[features]
+# Builds the ASIO SDK (downloaded at build time; needs LLVM). Without it the crate is empty,
+# so `cargo test --workspace` works without the SDK.
+sdk = ["dep:asio-sys", "dep:windows-sys"]
 
 # Same as the workspace lints, except that `unsafe_code` is denied rather than forbidden:
 # calling into the ASIO SDK and Win32 needs it, allowed on exactly those calls.
