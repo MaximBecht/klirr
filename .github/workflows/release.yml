@@ -219,9 +219,9 @@ jobs:
           path: klirr-*-source.tar.gz
           if-no-files-found: error
 
+  # On a dry run, everything but the attestations and the release itself
   release:
     name: Draft the release
-    if: github.ref_type == 'tag'
     needs: [version, windows, macos, linux, source]
     runs-on: ubuntu-latest
     permissions:
@@ -230,7 +230,7 @@ jobs:
       attestations: write
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      TAG: ${{ github.ref_name }}
+      TAG: ${{ github.ref_type == 'tag' && github.ref_name || 'dry-run' }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
@@ -239,12 +239,28 @@ jobs:
           path: dist
           pattern: '{windows,macos,linux,source}'
           merge-multiple: true
-      - run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
-      - uses: actions/attest-build-provenance@v4
+      # One flat folder: an artifact keeps the folders its files came from (Linux: appimage/, deb/)
+      - run: |
+          cd dist
+          find . -mindepth 2 -type f -exec mv -n -t . {} +
+          find . -mindepth 1 -type d -empty -delete
+          if find . -mindepth 1 -type d | grep -q .; then echo "Files with the same name"; exit 1; fi
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+      - run: sed "s/{{VERSION}}/$VERSION/g; s/{{TAG}}/$TAG/g" .github/release-notes.md > notes.md
+      - if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-preview
+          path: |
+            dist/SHA256SUMS
+            notes.md
+      - if: github.ref_type == 'tag'
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: dist/*
-      - run: |
-          sed "s/{{VERSION}}/$VERSION/g; s/{{TAG}}/$TAG/g" .github/release-notes.md > notes.md
+      - if: github.ref_type == 'tag'
+        run: |
           prerelease=$([[ "$VERSION" == *-* ]] && echo --prerelease || true)
           gh release create "$TAG" dist/* --draft $prerelease --verify-tag \
             --title "Klirr $VERSION" --notes-file notes.md
