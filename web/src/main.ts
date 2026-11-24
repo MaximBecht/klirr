@@ -68,7 +68,8 @@ const dropOverlay = $('drop-overlay');
 
 // ── Platform ───────────────────────────────────────────────
 // Texts and controls for one platform only: `data-web` (the browser) or `data-desktop`
-// (the desktop app, hidden until shown here).
+// (the desktop app, hidden until shown here). The stylesheet frames the amp per platform.
+document.documentElement.dataset.platform = DESKTOP ? 'desktop' : 'web';
 for (const e of document.querySelectorAll(DESKTOP ? '[data-web]' : '[data-desktop]')) e.remove();
 for (const e of document.querySelectorAll<HTMLElement>('[data-desktop]')) e.hidden = false;
 
@@ -684,5 +685,13 @@ window.addEventListener('drop', (e) => {
   if (file) void loadIr(file);
 });
 
-if (DESKTOP) await fillHosts();
+if (DESKTOP) {
+  // The amp is built: size the window to it and show it, before the drivers are listed
+  // (which can take a moment with ASIO).
+  const { fitWindow } = await import('./window');
+  fitWindow(app).catch((err: unknown) => {
+    say(`Could not size the window: ${err instanceof Error ? err.message : String(err)}`, true);
+  });
+  await fillHosts();
+}
 void refreshDevices();

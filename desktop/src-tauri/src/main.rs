@@ -10,6 +10,8 @@
 
 mod audio;
 
+use std::time::Duration;
+
 use klirr_dsp::Param;
 use klirr_native::devices::{self, DeviceInfo};
 use serde::Serialize;
@@ -124,9 +126,24 @@ fn measure(audio: State<'_, Audio>) -> Result<MeasureReply, String> {
     audio.measure()
 }
 
+/// How long the window may stay hidden. It opens hidden and the UI shows it once it has
+/// sized it to the amp; if the UI fails before that, the window is shown anyway.
+const SHOW_FALLBACK: Duration = Duration::from_secs(5);
+
 fn main() {
     let app = tauri::Builder::default()
         .manage(Audio::spawn())
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                std::thread::spawn(move || {
+                    std::thread::sleep(SHOW_FALLBACK);
+                    if window.is_visible().is_ok_and(|visible| !visible) {
+                        let _ = window.show();
+                    }
+                });
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             hosts, devices, start, stop, set_params, load_ir, measure
         ])
