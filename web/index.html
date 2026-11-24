@@ -174,30 +174,121 @@
             ×
           </button>
         </div>
-        <div class="device-grid">
-          <div class="device-group device-group--wide" data-desktop hidden>
-            <label class="device-label" for="host">DRIVER</label>
-            <select class="device-select" id="host"></select>
-          </div>
-          <div class="device-group">
-            <label class="device-label" for="input-device">INPUT</label>
+
+        <section class="settings-section" aria-labelledby="audio-device-title">
+          <h3 class="settings-heading" id="audio-device-title">AUDIO DEVICE</h3>
+          <div class="settings-rows">
+            <label class="settings-label" for="host" data-desktop hidden>Driver</label>
+            <select class="device-select" id="host" data-desktop hidden></select>
+            <label class="settings-label" for="input-device">Input</label>
             <select class="device-select" id="input-device"></select>
-          </div>
-          <div class="device-group">
-            <label class="device-label" for="input-channel">CHANNEL</label>
+            <label class="settings-label" for="input-channel">Input channel</label>
             <select class="device-select" id="input-channel">
               <option value="0">Input 1 (left)</option>
               <option value="1">Input 2 (right)</option>
             </select>
-          </div>
-          <div class="device-group device-group--wide">
-            <label class="device-label" for="output-device">OUTPUT</label>
+            <label class="settings-label" for="output-device">Output</label>
             <select class="device-select" id="output-device"></select>
+            <span class="settings-label" id="hardware-setup-label" data-desktop hidden
+              >Hardware setup</span
+            >
+            <span class="settings-control" data-desktop hidden>
+              <button
+                type="button"
+                class="btn btn--ghost"
+                id="hardware-setup"
+                aria-labelledby="hardware-setup-label"
+                aria-describedby="hardware-setup-detail"
+              >
+                HARDWARE SETUP
+              </button>
+            </span>
           </div>
-        </div>
-        <p class="notice notice--error" id="audio-error" hidden></p>
-        <p class="notice" id="device-notice" hidden></p>
-        <p class="panel-detail" id="audio-running"></p>
+          <p class="settings-note" id="hardware-setup-detail" data-desktop hidden></p>
+          <p class="notice notice--error" id="audio-error" hidden></p>
+          <p class="notice" id="device-notice" hidden></p>
+        </section>
+
+        <section class="settings-section" aria-labelledby="sample-rate-title">
+          <h3 class="settings-heading" id="sample-rate-title">SAMPLE RATE</h3>
+          <div class="settings-rows">
+            <label class="settings-label" for="sample-rate">Sample rate</label>
+            <select class="device-select" id="sample-rate" disabled></select>
+          </div>
+          <p class="settings-note" id="sample-rate-detail"></p>
+        </section>
+
+        <section class="settings-section" aria-labelledby="buffer-title" data-desktop hidden>
+          <h3 class="settings-heading" id="buffer-title">BUFFER</h3>
+          <div class="settings-rows">
+            <label class="settings-label" for="buffer">Buffer size</label>
+            <select class="device-select" id="buffer" disabled></select>
+          </div>
+          <p class="settings-note" id="buffer-detail"></p>
+        </section>
+
+        <section class="settings-section" aria-labelledby="audio-latency-title">
+          <h3 class="settings-heading" id="audio-latency-title">LATENCY</h3>
+          <!-- While audio is off there are no figures: say so, and offer to start it. -->
+          <div class="settings-rows settings-engage" id="audio-lat-engage-row">
+            <span class="settings-label">Audio is off</span>
+            <span class="settings-control">
+              <button type="button" class="btn btn--start btn--compact" id="audio-lat-engage">
+                ▶ ENGAGE
+              </button>
+            </span>
+          </div>
+          <dl class="settings-rows settings-values">
+            <dt class="settings-label">Input</dt>
+            <dd id="audio-lat-input">—</dd>
+            <dt class="settings-label">Output</dt>
+            <dd id="audio-lat-output">—</dd>
+            <dt class="settings-label">Engine</dt>
+            <dd id="audio-lat-engine">—</dd>
+            <dt class="settings-label">Overall</dt>
+            <dd class="settings-value--total" id="audio-lat-total">—</dd>
+            <dt class="settings-label">Measured</dt>
+            <dd id="audio-lat-measured">—</dd>
+          </dl>
+          <p class="settings-note">
+            <span id="audio-lat-detail"></span>
+            <button
+              type="button"
+              class="link-button"
+              popovertarget="latency-info"
+              aria-haspopup="dialog"
+            >
+              Measure and learn more
+            </button>
+          </p>
+        </section>
+
+        <section class="settings-section" aria-labelledby="test-title">
+          <h3 class="settings-heading" id="test-title">TEST</h3>
+          <div class="settings-rows">
+            <span class="settings-label" id="test-tone-label">Test tone</span>
+            <span class="settings-control">
+              <button
+                type="button"
+                class="btn btn--ghost btn--toggle"
+                id="test-tone"
+                aria-pressed="false"
+                aria-labelledby="test-tone-label"
+                aria-describedby="test-tone-detail"
+              >
+                OFF
+              </button>
+            </span>
+          </div>
+          <p class="settings-note" id="test-tone-detail">
+            A quiet 440 Hz tone (−20 dBFS) in place of the amp, to check that sound comes out of the
+            right output. Starts the audio if it is off; the tone stops when this panel closes.
+          </p>
+        </section>
+
+        <p class="settings-file" data-desktop hidden>
+          Settings file: <span class="settings-path" id="config-path">—</span>
+        </p>
       </div>
 
       <div
@@ -307,8 +398,7 @@
             <strong>Dropouts</strong> are counted when the output finds too little input waiting.
             You hear a short gap, and Klirr keeps a little more input in reserve from then on, so
             the latency grows by that much and stays there until you engage again. If dropouts keep
-            coming, close other programs that use audio, or choose a larger buffer in your
-            interface's driver settings.
+            coming, close other programs that use audio, or choose a larger buffer under Settings.
           </p>
           <h3>What to expect</h3>
           <ul data-desktop hidden>
@@ -323,12 +413,13 @@
               it to try Klirr out, then switch to exclusive or ASIO.
             </li>
             <li>
-              <strong>ASIO</strong>, where available, talks to your interface's own driver. Set the
-              buffer size in the driver's control panel.
+              <strong>ASIO</strong>, where available, talks to your interface's own driver. Choose
+              the buffer size under Settings, or keep the driver's own (set in its control panel).
             </li>
             <li>
-              <strong>Core Audio</strong> (macOS) and <strong>JACK</strong> or PipeWire (Linux) run
-              with small buffers for every app; set the buffer size in the system.
+              <strong>Core Audio</strong> (macOS) lets Klirr choose its own buffer under Settings.
+              <strong>JACK</strong> or PipeWire (Linux) run every app at the server's buffer size;
+              set it there.
             </li>
             <li>
               <strong>Bluetooth</strong> headphones or speakers add 100–300 ms. Use wired

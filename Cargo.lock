@@ -1840,12 +1840,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "klirr-asio"
+version = "0.1.0"
+dependencies = [
+ "asio-sys",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "klirr-desktop"
 version = "0.1.0"
 dependencies = [
  "klirr-dsp",
  "klirr-native",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
 ]
@@ -1864,6 +1873,7 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "hound",
+ "klirr-asio",
  "klirr-dsp",
  "rtrb",
  "wasapi",

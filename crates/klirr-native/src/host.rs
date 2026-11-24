@@ -205,7 +205,8 @@ pub fn name(device: &Device) -> String {
         .unwrap_or_else(|_| "(unnamed)".to_owned())
 }
 
-fn find(
+/// The device whose name is `part`, or else the first whose name contains it.
+pub(crate) fn find(
     devices: impl Iterator<Item = Device>,
     part: &str,
     kind: &str,
@@ -235,6 +236,28 @@ fn find(
     .into())
 }
 
+/// The input and output device of `host` whose names contain `input` and `output`, or its
+/// defaults.
+pub(crate) fn pick_devices(
+    host: &Host,
+    input: Option<&str>,
+    output: Option<&str>,
+) -> Result<(Device, Device), Box<dyn Error>> {
+    let input = match input {
+        Some(part) => find(host.input_devices()?, part, "input")?,
+        None => host
+            .default_input_device()
+            .ok_or("no default input device")?,
+    };
+    let output = match output {
+        Some(part) => find(host.output_devices()?, part, "output")?,
+        None => host
+            .default_output_device()
+            .ok_or("no default output device")?,
+    };
+    Ok((input, output))
+}
+
 impl Duplex {
     /// Opens the devices, starts both streams and runs `engine` between them.
     ///
@@ -255,18 +278,8 @@ impl Duplex {
         }
         let host = host(options.host.as_deref())?;
         let is_asio = host.id().name().eq_ignore_ascii_case("asio");
-        let input_device = match &options.input {
-            Some(part) => find(host.input_devices()?, part, "input")?,
-            None => host
-                .default_input_device()
-                .ok_or("no default input device")?,
-        };
-        let output_device = match &options.output {
-            Some(part) => find(host.output_devices()?, part, "output")?,
-            None => host
-                .default_output_device()
-                .ok_or("no default output device")?,
-        };
+        let (input_device, output_device) =
+            pick_devices(&host, options.input.as_deref(), options.output.as_deref())?;
 
         let out_default = output_device.default_output_config()?;
         let in_default = input_device.default_input_config()?;
@@ -456,6 +469,13 @@ impl Duplex {
         None
     }
 
+    /// Fades the test tone (see [`crate::tone`]) in or out. Returns false if the audio thread
+    /// has not taken the earlier commands yet; try again later.
+    pub fn set_test_tone(&mut self, on: bool) -> bool {
+        self.collect();
+        self.commands.push(Command::TestTone(on)).is_ok()
+    }
+
     /// Measures the latency over a loopback cable. Blocks for one to three seconds.
     ///
     /// # Errors
@@ -509,8 +529,14 @@ fn opening(kind: &str, device: &Device, e: &dyn std::fmt::Display) -> Box<dyn Er
 }
 
 fn on_error(stats: Arc<Stats>) -> impl FnMut(cpal::Error) + Send + 'static {
-    move |_| {
-        stats.backend_errors.fetch_add(1, Ordering::Relaxed);
+    move |e| {
+        // ASIO: the driver asked for a reset or resync, or its sample rate changed.
+        let counter = if e.kind() == cpal::ErrorKind::StreamInvalidated {
+            &stats.reset_requests
+        } else {
+            &stats.backend_errors
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 }
 

@@ -191,6 +191,41 @@ test('a stall the browser catches up on is not counted as a dropout', async ({ a
   await expect(page.locator('#lat-dropouts')).toHaveText('No dropouts since Engage.');
 });
 
+test('with audio off, the latency section offers to engage', async ({ app: page }) => {
+  await page.locator('#menu-audio').click();
+  const engageHere = page.locator('#audio-lat-engage');
+  await expect(engageHere).toBeVisible();
+  await engageHere.click();
+  await expect(page.locator('#status-text')).toHaveText('ACTIVE', { timeout: 15_000 });
+  await expect(engageHere).toBeHidden();
+  // The latency rows fill in while audio runs.
+  await expect(page.locator('#audio-lat-output')).toHaveText(/\d+\.\d ms/);
+});
+
+test('the test tone starts the audio if needed and stops when the settings close', async ({
+  app: page,
+}) => {
+  const tone = page.locator('#test-tone');
+  await page.locator('#menu-audio').click();
+  // Audio is off: the tone engages first, then plays.
+  await expect(tone).toBeEnabled();
+  await tone.click();
+  await expect(page.locator('#status-text')).toHaveText('ACTIVE', { timeout: 15_000 });
+  await expect(tone).toHaveAttribute('aria-pressed', 'true');
+  await page.waitForTimeout(200); // past the fade in
+  // The tone's own node is the last one connected to the output, so the probe hears it alone:
+  // a steady sine at −20 dBFS.
+  const { output } = await measure(page, 500);
+  expect(output.nonFinite).toBe(0);
+  expect(Math.abs(dbfs(output.maxPeak) - -20)).toBeLessThan(1);
+  expect(dbfs(output.minRms)).toBeGreaterThan(-25);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#audio-panel')).toBeHidden();
+  await expect(tone).toHaveAttribute('aria-pressed', 'false');
+  // The audio it started keeps running.
+  await expect(page.locator('#status-text')).toHaveText('ACTIVE');
+});
+
 test('bypass passes the dry signal through', async ({ app: page }) => {
   await engage(page);
   await page.locator('#bypass').click();

@@ -162,6 +162,8 @@ latency panel, so the figures compare directly.
 
 ```sh
 cargo run --release -p klirr-native -- devices                      # hosts and devices
+cargo run --release -p klirr-native -- buffers --host wasapi-exclusive  # buffer sizes and rates allowed
+cargo run --release -p klirr-native -- setup --host asio             # the driver's control panel
 cargo run --release -p klirr-native -- measure --device Focusrite   # loopback latency
 cargo run --release -p klirr-native -- play --device Focusrite channel=2 gain=0.7 cabinet=2
 ```
@@ -209,6 +211,34 @@ npm run dev                        # the app, with the UI served by Vite (hot re
 npm run build                      # a release build and installer, in target/release/bundle/
 npm run build -- --features asio   # the same with ASIO (Windows; see above)
 ```
+
+The **Audio** panel holds the whole audio setup: driver, devices, sample rate, buffer size, the
+latency figures and a test tone. Klirr only asks for a buffer size or sample rate when it opens
+the devices and writes no driver or system settings itself, so nothing it chooses outlives it:
+
+- The **buffer size** is a menu where the driver lets Klirr ask for one (WASAPI exclusive,
+  ASIO drivers that report a range, Core Audio, ALSA); where it belongs to the system or the
+  driver (WASAPI shared, JACK, ASIO drivers with one size), it is shown greyed out.
+- The **sample rate** is a menu only on WASAPI exclusive, where the device runs at Klirr's rate
+  while Klirr holds it and goes back to its own after. Elsewhere it is shown greyed out: an
+  ASIO driver's rate applies to every program.
+- **Hardware Setup** opens where the settings for every program live: the ASIO driver's own
+  control panel, the Windows Sound settings, or Audio MIDI Setup on macOS. When an ASIO driver
+  asks for a restart after a change there, Klirr opens the devices again by itself.
+- The **test tone** (440 Hz at −20 dBFS, in place of the amp) checks the output; it stops when
+  the panel closes.
+
+If a driver refuses a size or rate, Klirr opens it with the driver's own and says so. Each driver
+remembers its own devices and each output device its own buffer and rate. The **Latency** panel
+is the measuring tool: the loopback measurement, and how much of it the driver does not report.
+
+The app keeps its settings in `settings.json` in its config folder
+(`%APPDATA%\io.github.maximbecht.klirr` on Windows,
+`~/Library/Application Support/io.github.maximbecht.klirr` on macOS,
+`~/.config/io.github.maximbecht.klirr` on Linux), the same format on every platform. The file
+is versioned (`"version"`); an older one is migrated when it is read, fields the app does not
+know are kept, an unreadable one is kept as `settings.broken.json`, and a newer app's file is
+copied to `settings.v<N>.json` before an older app writes over it.
 
 You need Node.js 20.19 or newer and the web app's dependencies (`npm install` in `web/`). Rust
 1.90 or newer builds the app. On Linux it also needs WebKitGTK and a few libraries (see

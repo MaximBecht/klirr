@@ -4,16 +4,19 @@
 //! audio themselves: they send a [`Request`] to the controller and wait for its reply. Between
 //! requests the controller sends the meters (30 times a second) and the latency figures (once
 //! a second) to the webview, flushes parameter changes the audio thread could not take yet and
-//! collects measurement results.
+//! collects measurement results. When the driver asks to be restarted (an ASIO driver does
+//! after its buffer size was changed in its control panel), it opens the devices again with
+//! the same request and tells the webview what runs now.
 
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-use klirr_dsp::{CustomIr, Param};
+use klirr_dsp::{CustomIr, Engine, Param};
 use klirr_native::duplex::Stats;
 use klirr_native::host::{Duplex, MeasureError, Options};
 use klirr_native::probe::Failure;
+use klirr_native::{devices, setup};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 
@@ -37,6 +40,14 @@ pub struct StartRequest {
     pub output: String,
     /// Input channel, from 0.
     pub channel: usize,
+    /// Buffer size to ask the driver for, in frames; None for the driver's own.
+    #[serde(default)]
+    pub buffer: Option<u32>,
+    /// Sample rate to ask for, in Hz; None for the device's own. Only where the rate is
+    /// Klirr's to choose (WASAPI exclusive): on ASIO it would change the interface's rate for
+    /// every program.
+    #[serde(default)]
+    pub rate: Option<u32>,
     /// Every parameter, by index.
     pub params: Vec<f32>,
 }
@@ -53,6 +64,13 @@ pub struct Started {
     /// Buffer sizes the backend reports, in frames.
     input_buffer: Option<u32>,
     output_buffer: Option<u32>,
+    /// The buffer size that was asked for (None: the driver's own).
+    requested_buffer: Option<u32>,
+    /// Why the requested size or rate was not used, if the devices would not open with them
+    /// and opened with the driver's own instead.
+    buffer_refused: Option<String>,
+    /// The sample rate that was asked for (None: the device's own).
+    requested_rate: Option<u32>,
     /// The engine's own latency, in samples.
     engine_latency: usize,
 }
@@ -82,6 +100,10 @@ pub enum Event {
     },
     /// The backend reported an error (often: the device was unplugged).
     DeviceError,
+    /// The driver asked for a restart and the devices were opened again: what runs now.
+    Restarted { started: Started },
+    /// The driver asked for a restart, and the devices would not open again: audio stopped.
+    RestartFailed { message: String },
 }
 
 /// The result of a loopback measurement, shaped like the web app's `Measurement`.
@@ -117,6 +139,8 @@ enum Request {
     Params(Vec<(Param, f32)>),
     Ir(Vec<f32>, f32, Reply<Result<(), String>>),
     Measure(Reply<MeasureReply>),
+    TestTone(bool),
+    HardwareSetup(Option<String>, Option<String>, Reply<Result<(), String>>),
 }
 
 /// The handle the commands use: sends requests to the controller thread.
@@ -170,12 +194,38 @@ impl Audio {
     pub fn measure(&self) -> Result<MeasureReply, String> {
         self.call(Request::Measure)
     }
+
+    /// Fades the test tone in or out while audio runs (it is off after every start).
+    pub fn test_tone(&self, on: bool) -> Result<(), String> {
+        self.requests
+            .send(Request::TestTone(on))
+            .map_err(|_| "the audio controller has stopped".to_owned())
+    }
+
+    /// Opens the hardware setup of `host` for `output` (None: the defaults): the ASIO
+    /// driver's control panel, or the system's audio settings. An ASIO panel may only return
+    /// once the user closes it.
+    pub fn hardware_setup(
+        &self,
+        host: Option<String>,
+        output: Option<String>,
+    ) -> Result<(), String> {
+        self.call(|reply| Request::HardwareSetup(host, output, reply))?
+    }
 }
 
 /// The amp while audio runs.
 struct Running {
     duplex: Duplex,
     events: Channel<Event>,
+    /// What was asked for, to open the same again when the driver asks for a restart.
+    request: StartRequest,
+    /// Whether the test tone is on.
+    tone: bool,
+    /// The tone command did not fit in the queue yet.
+    tone_unsent: bool,
+    /// Reset requests already handled (or there before audio settled).
+    resets_seen: u32,
     /// The margin between the streams at start; what it grew by since is added latency.
     initial_margin: u32,
     /// Underruns while the streams found their rhythm, which are not dropouts. Taken at the
@@ -238,6 +288,20 @@ impl Controller {
                 }
                 let _ = reply.send(result);
             }
+            Request::TestTone(on) => {
+                if let Some(r) = &mut self.running {
+                    r.tone = on;
+                    // A full command queue only means the audio thread is behind; the next
+                    // tick sends it again.
+                    r.tone_unsent = !r.duplex.set_test_tone(on);
+                }
+            }
+            Request::HardwareSetup(host, output, reply) => {
+                let running = self.running.as_ref().map(|r| &r.duplex);
+                let result = setup::open(host.as_deref(), output.as_deref(), running)
+                    .map_err(|e| e.to_string());
+                let _ = reply.send(result);
+            }
             Request::Measure(reply) => match &mut self.running {
                 Some(r) => {
                     if r.duplex.start_measure().is_ok() {
@@ -265,16 +329,23 @@ impl Controller {
         }
         self.unsent.clear();
         let non_empty = |s: &str| (!s.is_empty()).then(|| s.to_owned());
-        let options = Options {
+        let requested_buffer = request.buffer.filter(|&frames| frames > 0);
+        // Never on a host where the rate belongs to every program.
+        let requested_rate = request
+            .rate
+            .filter(|&rate| rate > 0 && devices::chooses_rate(non_empty(&request.host).as_deref()));
+        let mut options = Options {
             host: non_empty(&request.host),
             input: non_empty(&request.input),
             output: non_empty(&request.output),
             channel: request.channel,
+            buffer: requested_buffer,
+            rate: requested_rate,
             ..Options::default()
         };
         let params = &self.params;
         let ir = &self.ir;
-        let duplex = Duplex::open(&options, |engine| {
+        let setup = |engine: &mut Engine| {
             for &(param, value) in params {
                 engine.set_param(param, value);
             }
@@ -282,8 +353,21 @@ impl Controller {
                 // Checked when it was loaded; it can only fail for a broken sample rate.
                 let _ = engine.load_custom_ir(samples, *rate);
             }
-        })
-        .map_err(|e| e.to_string())?;
+        };
+        let mut buffer_refused = None;
+        let duplex = match Duplex::open(&options, setup) {
+            Ok(duplex) => duplex,
+            // The driver would not take the size or rate: open with its own rather than not
+            // at all. If that fails too, the first error is the one to show.
+            Err(e) if requested_buffer.is_some() || requested_rate.is_some() => {
+                options.buffer = None;
+                options.rate = None;
+                let duplex = Duplex::open(&options, setup).map_err(|_| e.to_string())?;
+                buffer_refused = Some(e.to_string());
+                duplex
+            }
+            Err(e) => return Err(e.to_string()),
+        };
 
         let i = &duplex.info;
         let started = Started {
@@ -294,13 +378,20 @@ impl Controller {
             input_channels: i.input_channels,
             input_buffer: i.input_buffer,
             output_buffer: i.output_buffer,
+            requested_buffer,
+            buffer_refused,
+            requested_rate,
             engine_latency: i.engine_latency,
         };
         let now = Instant::now();
         self.running = Some(Running {
             initial_margin: duplex.stats.margin_frames.load(Ordering::Relaxed),
+            resets_seen: duplex.stats.reset_requests.load(Ordering::Relaxed),
             duplex,
             events,
+            request: request.clone(),
+            tone: false,
+            tone_unsent: false,
             startup_underruns: None,
             backend_errors: 0,
             measurement: None,
@@ -316,12 +407,53 @@ impl Controller {
         }
     }
 
+    /// Opens the devices again with what ran, because the driver asked for it (its buffer
+    /// size or sample rate changed). The test tone stays as it was.
+    fn restart(&mut self) {
+        let Some(old) = self.running.take() else {
+            return;
+        };
+        if let Some(reply) = old.measurement {
+            let _ = reply.send(MeasureReply::failed("stopped"));
+        }
+        let Running {
+            duplex,
+            events,
+            request,
+            tone,
+            ..
+        } = old;
+        // The old streams close before the driver is opened again.
+        drop(duplex);
+        match self.start(&request, events.clone()) {
+            Ok(started) => {
+                if let Some(r) = &mut self.running {
+                    r.tone = tone;
+                    r.tone_unsent = tone;
+                }
+                let _ = events.send(Event::Restarted { started });
+            }
+            Err(message) => {
+                let _ = events.send(Event::RestartFailed { message });
+            }
+        }
+    }
+
     fn tick(&mut self) {
+        // An ASIO control panel opened on this thread without waiting for it to close.
+        setup::pump_messages();
         let Some(r) = &mut self.running else {
             return;
         };
+        if r.duplex.stats.reset_requests.load(Ordering::Relaxed) > r.resets_seen {
+            self.restart();
+            return;
+        }
         self.unsent
             .retain(|&(param, value)| !r.duplex.set_param(param, value));
+        if r.tone_unsent {
+            r.tone_unsent = !r.duplex.set_test_tone(r.tone);
+        }
 
         if let Some(result) = r.duplex.poll_measure() {
             let reply = match result {

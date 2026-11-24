@@ -716,8 +716,8 @@ impl FillTarget {
 }
 
 /// Runs `f` on a new thread with COM set up the way this module needs it.
-fn on_com_thread<T: Send + 'static>(
-    f: impl FnOnce() -> Result<T, WasapiError> + Send + 'static,
+fn on_com_thread<T: Send + 'static, E: std::fmt::Display>(
+    f: impl FnOnce() -> Result<T, E> + Send + 'static,
 ) -> Result<T, Box<dyn Error>> {
     let thread = std::thread::spawn(|| {
         if wasapi::initialize_mta().is_err() {
@@ -729,7 +729,7 @@ fn on_com_thread<T: Send + 'static>(
     });
     match thread.join() {
         Ok(result) => Ok(result?),
-        Err(_) => Err("listing the WASAPI exclusive devices failed".into()),
+        Err(_) => Err("asking the WASAPI exclusive devices failed".into()),
     }
 }
 
@@ -774,7 +774,7 @@ pub fn devices() -> Result<DeviceList, Box<dyn Error>> {
                 });
             }
         }
-        Ok(list)
+        Ok::<_, WasapiError>(list)
     })
 }
 
@@ -829,6 +829,81 @@ fn describe(device: &Device) -> String {
         _ => format!("no exclusive mode: {e}"),
     })
 }
+
+/// The buffer sizes exclusive mode can run `input` and `output` at (None: the defaults):
+/// one period for both, from the larger of their smallest periods up. Without a request
+/// Klirr runs at that smallest period. The driver may round a size to the period it can
+/// align to; the size that runs is reported once it does. Also the sample rates both devices
+/// accept in exclusive mode: the device runs at the rate Klirr asks for while Klirr holds it,
+/// and goes back to its shared-mode rate after. The sizes count frames at `rate` if both
+/// accept it, else at the shared-mode rate.
+///
+/// # Errors
+///
+/// If a device cannot be found or does not report its format or periods.
+pub fn buffer_choice(
+    input: Option<&str>,
+    output: Option<&str>,
+    rate: Option<u32>,
+) -> Result<crate::devices::BufferChoice, Box<dyn Error>> {
+    let input = input.map(str::to_owned);
+    let output = output.map(str::to_owned);
+    on_com_thread(move || {
+        let enumerator =
+            DeviceEnumerator::new().map_err(|e| format!("could not list devices: {e}"))?;
+        let open = |direction: Direction, part: Option<&str>| {
+            let device = find_device(&enumerator, direction, part)?;
+            let name = device.get_friendlyname().unwrap_or_default();
+            let client = device
+                .get_iaudioclient()
+                .map_err(|e| explain("open", &name, &e))?;
+            let mix = client
+                .get_mixformat()
+                .map_err(|e| explain("read the format of", &name, &e))?;
+            let (default, min) = client
+                .get_device_period()
+                .map_err(|e| explain("read the period of", &name, &e))?;
+            Ok::<_, String>((client, mix, default, min))
+        };
+        let (in_client, in_mix, in_default, in_min) = open(Direction::Capture, input.as_deref())?;
+        let (out_client, out_mix, out_default, out_min) =
+            open(Direction::Render, output.as_deref())?;
+        // The rates both ends accept in exclusive mode, in any format Klirr can use.
+        let in_channels = in_mix.get_nchannels();
+        let out_channels = out_mix.get_nchannels();
+        let rates: Vec<u32> = OFFERED_RATES
+            .iter()
+            .copied()
+            .filter(|&r| {
+                negotiate(&in_client, r, in_channels).is_ok()
+                    && negotiate(&out_client, r, out_channels).is_ok()
+            })
+            .collect();
+        let shared_rate = out_mix.get_samplespersec();
+        let rate = rate.filter(|r| rates.contains(r)).unwrap_or(shared_rate);
+        // The device periods are times; the sizes count frames at the rate that will run.
+        let frames =
+            |hns: i64| u32::try_from((hns * i64::from(rate) + 5_000_000) / 10_000_000).unwrap_or(0);
+        let smallest = frames(in_min.max(out_min));
+        let mut sizes = crate::devices::offered_sizes(smallest, crate::devices::LARGEST_OFFERED);
+        // The devices' own default period (usually 10 ms), the size shared mode runs at.
+        let usual = frames(in_default.max(out_default));
+        if usual > smallest && !sizes.contains(&usual) {
+            sizes.push(usual);
+            sizes.sort_unstable();
+        }
+        Ok::<_, String>(crate::devices::BufferChoice {
+            sample_rate: rate,
+            rates,
+            default: Some(smallest),
+            sizes,
+            set_by: None,
+        })
+    })
+}
+
+/// Sample rates offered in exclusive mode, where both devices accept them.
+const OFFERED_RATES: [u32; 6] = [44_100, 48_000, 88_200, 96_000, 176_400, 192_000];
 
 #[cfg(test)]
 mod tests {

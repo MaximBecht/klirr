@@ -9,7 +9,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod config;
 
+use std::sync::Mutex;
 use std::time::Duration;
 
 use klirr_dsp::Param;
@@ -19,6 +21,7 @@ use tauri::ipc::{Channel, InvokeBody, Request};
 use tauri::{Manager, RunEvent, State};
 
 use audio::{Audio, Event, MeasureReply, StartRequest, Started};
+use config::{Config, Status, Store};
 
 /// An audio host, for the driver menu.
 #[derive(Serialize)]
@@ -27,6 +30,8 @@ struct HostEntry {
     id: String,
     name: String,
     is_default: bool,
+    /// What the Hardware Setup button opens; None where there is nothing to open.
+    hardware_setup: Option<&'static str>,
 }
 
 /// A device, for the device menus.
@@ -62,6 +67,7 @@ fn hosts() -> Vec<HostEntry> {
             id: h.id,
             name: h.name,
             is_default: h.is_default,
+            hardware_setup: h.hardware_setup,
         })
         .collect()
 }
@@ -76,6 +82,97 @@ fn devices(host: String) -> Result<DeviceLists, String> {
         inputs: entries(list.inputs),
         outputs: entries(list.outputs),
     })
+}
+
+/// The buffer sizes and sample rates a host's devices allow.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BufferChoice {
+    sample_rate: u32,
+    rates: Vec<u32>,
+    default: Option<u32>,
+    sizes: Vec<u32>,
+    set_by: Option<&'static str>,
+}
+
+/// Buffer sizes and sample rates for a host and devices (empty strings: the defaults), the
+/// sizes counted at `rate` where Klirr chooses the rate. Like [`devices()`], it can load
+/// drivers, so it runs off the main thread.
+#[tauri::command(async)]
+fn buffer_sizes(
+    host: String,
+    input: String,
+    output: String,
+    rate: Option<u32>,
+) -> Result<BufferChoice, String> {
+    let some = |s: &str| (!s.is_empty()).then(|| s.to_owned());
+    let (host, input, output) = (some(&host), some(&input), some(&output));
+    let c = devices::buffer_choice(host.as_deref(), input.as_deref(), output.as_deref(), rate)
+        .map_err(|e| e.to_string())?;
+    Ok(BufferChoice {
+        sample_rate: c.sample_rate,
+        rates: c.rates,
+        default: c.default,
+        sizes: c.sizes,
+        set_by: c.set_by,
+    })
+}
+
+/// The settings file, and what it holds. None if the config folder could not be found.
+struct Settings(Mutex<Option<(Store, Loaded)>>);
+
+/// What [`load_config`] returns.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Loaded {
+    config: Config,
+    /// How the file was found when the app started.
+    status: Status,
+    /// Where the file is, to show the user.
+    path: String,
+    /// Where an unreadable file was moved to (with [`Status::Broken`]).
+    broken_path: Option<String>,
+}
+
+const NO_SETTINGS: &str = "the settings folder could not be found";
+
+/// The settings: as the app found them at start, with what was saved since.
+#[tauri::command]
+fn load_config(settings: State<'_, Settings>) -> Result<Loaded, String> {
+    let guard = settings.0.lock().map_err(|_| NO_SETTINGS)?;
+    guard
+        .as_ref()
+        .map(|(_, loaded)| loaded.clone())
+        .ok_or_else(|| NO_SETTINGS.to_owned())
+}
+
+#[tauri::command]
+fn save_config(settings: State<'_, Settings>, config: Config) -> Result<(), String> {
+    let mut guard = settings.0.lock().map_err(|_| NO_SETTINGS)?;
+    let (store, loaded) = guard.as_mut().ok_or(NO_SETTINGS)?;
+    store.save(&config).map_err(|e| {
+        format!(
+            "could not save the settings to {}: {e}",
+            store.path().display()
+        )
+    })?;
+    loaded.config = config;
+    Ok(())
+}
+
+/// Opens the settings file in the app's config folder.
+fn open_settings(app: &tauri::App) -> Settings {
+    let Ok(dir) = app.path().app_config_dir() else {
+        return Settings(Mutex::new(None));
+    };
+    let (store, config, status) = Store::open(&dir);
+    let loaded = Loaded {
+        config,
+        status,
+        path: store.path().display().to_string(),
+        broken_path: (status == Status::Broken).then(|| store.broken_path().display().to_string()),
+    };
+    Settings(Mutex::new(Some((store, loaded))))
 }
 
 #[tauri::command(async)]
@@ -126,6 +223,20 @@ fn measure(audio: State<'_, Audio>) -> Result<MeasureReply, String> {
     audio.measure()
 }
 
+#[tauri::command]
+fn test_tone(audio: State<'_, Audio>, on: bool) -> Result<(), String> {
+    audio.test_tone(on)
+}
+
+/// Opens the hardware setup for a host and output device (empty strings: the defaults). An
+/// ASIO driver's panel can keep it waiting until the user closes it, so it runs off the main
+/// thread.
+#[tauri::command(async)]
+fn hardware_setup(audio: State<'_, Audio>, host: String, output: String) -> Result<(), String> {
+    let some = |s: String| (!s.is_empty()).then_some(s);
+    audio.hardware_setup(some(host), some(output))
+}
+
 /// How long the window may stay hidden. It opens hidden and the UI shows it once it has
 /// sized it to the amp; if the UI fails before that, the window is shown anyway.
 const SHOW_FALLBACK: Duration = Duration::from_secs(5);
@@ -134,6 +245,7 @@ fn main() {
     let app = tauri::Builder::default()
         .manage(Audio::spawn())
         .setup(|app| {
+            app.manage(open_settings(app));
             if let Some(window) = app.get_webview_window("main") {
                 std::thread::spawn(move || {
                     std::thread::sleep(SHOW_FALLBACK);
@@ -145,7 +257,18 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            hosts, devices, start, stop, set_params, load_ir, measure
+            hosts,
+            devices,
+            buffer_sizes,
+            load_config,
+            save_config,
+            start,
+            stop,
+            set_params,
+            load_ir,
+            measure,
+            test_tone,
+            hardware_setup
         ])
         .build(tauri::generate_context!())
         .expect("could not start the Klirr window");
