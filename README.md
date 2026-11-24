@@ -215,7 +215,14 @@ npm install
 npm run dev                        # the app, with the UI served by Vite (hot reload)
 npm run build                      # a release build and installer, in target/release/bundle/
 npm run build -- --features asio   # the same with ASIO (Windows; see above)
+npm run build:windows              # the Windows release installer, with both builds
 ```
+
+The Windows release installer holds both builds of `klirr.exe` and installs one: **ASIO
+support (GPLv3)** is a component, selected by default, that installs the ASIO build in place of
+the MIT one. It remembers the choice for updates; `/ASIO=0` or `/ASIO=1` sets it for silent
+installs (`/S`). Its NSIS template is Tauri's, with the changes marked, in
+`desktop/src-tauri/windows/`; the licenses it installs say which build is under which license.
 
 The **Audio** panel holds the whole audio setup: driver, devices, sample rate, buffer size, the
 latency figures and a test tone. Klirr only asks for a buffer size or sample rate when it opens
