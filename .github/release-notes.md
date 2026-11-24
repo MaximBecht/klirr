@@ -15,9 +15,11 @@ most audio interfaces. With it, Klirr includes the Steinberg ASIO SDK and is lic
 GPLv3 instead of MIT; without it, Klirr uses WASAPI. The installer is not signed yet, so
 Windows may say it "protected your PC": choose *More info*, then *Run anyway*.
 
-**macOS:** the app is not notarised yet. On the first start, open it with a right-click and
-*Open*, or allow it under *System Settings › Privacy & Security*. Klirr asks for the
-microphone: that is the input of your audio interface.
+**macOS:** the app is not notarised yet, so macOS blocks it on the first start. Move Klirr to
+*Applications*, open it and close the warning with *Done*. Then open *System Settings ›
+Privacy & Security*, choose *Open Anyway* next to the note about Klirr and confirm. On macOS 14
+and older, a right-click on the app and *Open* is enough. Klirr asks for the microphone: that
+is the input of your audio interface.
 
 ## Checking the downloads
 
