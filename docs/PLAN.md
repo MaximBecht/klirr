@@ -335,8 +335,8 @@ high-gain stage measures around −22 dB.
 - [x] Cloudflare deployment of the web app at `klirr.bechtstudio.com`: `web/wrangler.jsonc`
   (static assets only, custom domain, no `workers.dev` address), security headers in
   `web/public/_headers`, `deploy` job in `ci.yml` on pushes to `main`
-- [ ] First deploy: add the repository secrets `CLOUDFLARE_API_TOKEN` and
-  `CLOUDFLARE_ACCOUNT_ID`, merge, check the site and its headers
+- [x] First deploy (2026-11-25): repository secrets `CLOUDFLARE_API_TOKEN` (scoped to the
+  account and the bechtstudio.com zone) and `CLOUDFLARE_ACCOUNT_ID`; site and headers checked
 - [ ] Preview deploys per PR
 - [ ] Product page on bechtstudio.com (`/en/work/klirr`, `/de/arbeit/klirr`) with a "Try in
   browser" button and a Download button to the GitHub releases

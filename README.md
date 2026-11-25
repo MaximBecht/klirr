@@ -18,9 +18,11 @@ processing happens on your own computer; nothing is uploaded.
 *The name comes from the German* Klirrfaktor *— total harmonic distortion, which is exactly
 what an amp's gain stage produces.*
 
-> **Status: early development.** The DSP core (`crates/klirr-dsp`) is done and tested. The first
-> versions of the web app (`web/`) and of the desktop app (`desktop/`, lower latency) run
-> locally; public hosting and installers come next. See the [project plan](docs/PLAN.md).
+> **Status: alpha.** Try it in your browser at
+> [klirr.bechtstudio.com](https://klirr.bechtstudio.com), or download the desktop app for
+> Windows, macOS and Linux (lower latency) from the
+> [releases](https://github.com/MaximBecht/klirr/releases). Expect rough edges, and please
+> report what you find. See the [project plan](docs/PLAN.md) for what comes next.
 
 ## Features
 
@@ -130,7 +132,7 @@ press **Engage** and allow audio input. Your settings are remembered in the brow
 - **Use a Hi-Z / instrument input.** A guitar on a plain line-in works, but sounds weaker and
   duller; an audio interface or a pedal in front fixes that.
 - **Latency** in the browser is roughly 20–40 ms from string to ear on Windows in Chrome and Edge
-  (browsers cannot use ASIO), more in Firefox. Fine for practice; the desktop app will do better.
+  (browsers cannot use ASIO), more in Firefox. Fine for practice; the desktop app does better.
   Click the latency figure in the footer for the browser's breakdown, or measure the real figure
   with a cable from your interface's output to its input.
 - **Cabinet IRs:** drop a `.wav` impulse response anywhere on the page (or use *Load IR…*).
